@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Tracking Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        #videoContainer {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            background: #000;
+            margin: 20px 0;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #log {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+    </style>
+</head>
+<body>
+    <h1>Face Tracking Test</h1>
+    
+    <div>
+        <button onclick="startCamera()">Start Camera</button>
+        <button onclick="stopCamera()">Stop Camera</button>
+        <button onclick="testStaticBox()">Test Static Box</button>
+        <button onclick="testSimulatedFace()">Test Simulated Face</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+    
+    <div id="videoContainer">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+    </div>
+    
+    <div id="status">Status: Not started</div>
+    
+    <h3>Console Log:</h3>
+    <div id="log"></div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+        
+        let stream = null;
+        let animationFrame = null;
+        let detectionInterval = null;
+        let lastFaceBox = null;
+        let smoothedBox = null;
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type;
+            logDiv.innerHTML += `<div class="${className}">[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(message);
+        }
+        
+        function clearLog() {
+            logDiv.innerHTML = '';
+        }
+        
+        async function startCamera() {
+            try {
+                log('Requesting camera access...', 'info');
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                
+                video.srcObject = stream;
+                
+                video.onloadedmetadata = () => {
+                    log('✓ Video metadata loaded', 'success');
+                    log(`Video dimensions: ${video.videoWidth}x${video.videoHeight}`, 'info');
+                    
+                    // Set canvas size
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    log(`Canvas dimensions: ${canvas.width}x${canvas.height}`, 'info');
+                    
+                    // Start animation loop
+                    updateOverlay();
+                    
+                    // Start simulated detection (replace with real API call)
+                    detectionInterval = setInterval(simulateDetection, 500);
+                    
+                    statusDiv.textContent = 'Status: Camera active';
+                    log('✓ Camera started successfully', 'success');
+                };
+                
+            } catch (error) {
+                log(`✗ Camera error: ${error.message}`, 'error');
+                statusDiv.textContent = 'Status: Camera error';
+            }
+        }
+        
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+                
+                if (animationFrame) {
+                    cancelAnimationFrame(animationFrame);
+                    animationFrame = null;
+                }
+                
+                if (detectionInterval) {
+                    clearInterval(detectionInterval);
+                    detectionInterval = null;
+                }
+                
+                lastFaceBox = null;
+                smoothedBox = null;
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                statusDiv.textContent = 'Status: Camera stopped';
+                log('✓ Camera stopped', 'success');
+            }
+        }
+        
+        function simulateDetection() {
+            // Simulate face detection with random movement
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            const offsetX = (Math.random() - 0.5) * 100;
+            const offsetY = (Math.random() - 0.5) * 100;
+            
+            lastFaceBox = {
+                x: centerX - 100 + offsetX,
+                y: centerY - 125 + offsetY,
+                w: 200,
+                h: 250
+            };
+            
+            log(`Simulated face at: x=${Math.round(lastFaceBox.x)}, y=${Math.round(lastFaceBox.y)}`, 'info');
+        }
+        
+        function smoothBox(newBox, alpha = 0.3) {
+            if (!smoothedBox) {
+                smoothedBox = { ...newBox };
+                return smoothedBox;
+            }
+            
+            smoothedBox.x += alpha * (newBox.x - smoothedBox.x);
+            smoothedBox.y += alpha * (newBox.y - smoothedBox.y);
+            smoothedBox.w += alpha * (newBox.w - smoothedBox.w);
+            smoothedBox.h += alpha * (newBox.h - smoothedBox.h);
+            
+            return smoothedBox;
+        }
+        
+        function drawFaceBox(box) {
+            const { x, y, w, h } = box;
+            
+            // Draw green bounding box
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, w, h);
+            
+            // Draw corner markers
+            const cornerLength = 20;
+            ctx.lineWidth = 4;
+            
+            // Top-left
+            ctx.beginPath();
+            ctx.moveTo(x, y + cornerLength);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x + cornerLength, y);
+            ctx.stroke();
+            
+            // Top-right
+            ctx.beginPath();
+            ctx.moveTo(x + w - cornerLength, y);
+            ctx.lineTo(x + w, y);
+            ctx.lineTo(x + w, y + cornerLength);
+            ctx.stroke();
+            
+            // Bottom-left
+            ctx.beginPath();
+            ctx.moveTo(x, y + h - cornerLength);
+            ctx.lineTo(x, y + h);
+            ctx.lineTo(x + cornerLength, y + h);
+            ctx.stroke();
+            
+            // Bottom-right
+            ctx.beginPath();
+            ctx.moveTo(x + w - cornerLength, y + h);
+            ctx.lineTo(x + w, y + h);
+            ctx.lineTo(x + w, y + h - cornerLength);
+            ctx.stroke();
+            
+            // Draw label
+            ctx.fillStyle = '#00FF00';
+            ctx.font = 'bold 14px Arial';
+            ctx.fillText('Face Detected', x, y - 10);
+        }
+        
+        function updateOverlay() {
+            if (!canvas || !video || video.readyState !== 4) {
+                animationFrame = requestAnimationFrame(updateOverlay);
+                return;
+            }
+            
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw face box if detected
+            if (lastFaceBox) {
+                const smoothed = smoothBox(lastFaceBox);
+                drawFaceBox(smoothed);
+            }
+            
+            // Continue loop
+            animationFrame = requestAnimationFrame(updateOverlay);
+        }
+        
+        function testStaticBox() {
+            log('Drawing static test box...', 'info');
+            ctx.strokeStyle = '#FF0000';
+            ctx.lineWidth = 5;
+            ctx.strokeRect(100, 100, 200, 200);
+            log('✓ Static red box drawn at (100, 100, 200, 200)', 'success');
+        }
+        
+        function testSimulatedFace() {
+            log('Testing simulated face detection...', 'info');
+            lastFaceBox = {
+                x: 150,
+                y: 100,
+                w: 200,
+                h: 250
+            };
+            log('✓ Simulated face box set', 'success');
+        }
+        
+        // Log initial state
+        log('Face Tracking Test Page Loaded', 'success');
+        log('Click "Start Camera" to begin', 'info');
+    </script>
+</body>
+</html>

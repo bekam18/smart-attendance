@@ -1,0 +1,7 @@
+# Place your trained model files here:
+# - face_classifier_v1.pkl
+# - label_encoder.pkl
+# - label_encoder_classes.npy
+# - labels.csv (optional)
+# - X.npy (optional)
+# - y.npy (optional)

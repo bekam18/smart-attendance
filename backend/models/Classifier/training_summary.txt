@@ -1,0 +1,35 @@
+============================================================
+FACE RECOGNITION MODEL TRAINING SUMMARY
+============================================================
+
+Training Date: 2025-12-01T09:47:43.312736
+Embedding Model: InceptionResnetV1 (vggface2)
+Embedding Dimension: 512
+Classifier: SVC
+Number of Students: 19
+Training Samples: 3442
+Test Accuracy: 1.0000
+Confidence Threshold: 0.9703
+
+Student IDs:
+  1. STU001
+  2. STU002
+  3. STU003
+  4. STU004
+  5. STU005
+  6. STU006
+  7. STU008
+  8. STU009
+  9. STU010
+  10. STU011
+  11. STU012
+  12. STU013
+  13. STU014
+  14. STU015
+  15. STU016
+  16. STU017
+  17. STU018
+  18. STU019
+  19. STU020
+
+============================================================

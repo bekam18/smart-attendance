@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Canvas Debug Test</title>
+    <style>
+        body {
+            margin: 20px;
+            font-family: Arial, sans-serif;
+        }
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            margin: 20px auto;
+            background: black;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 9999;
+            pointer-events: none;
+        }
+        .info {
+            max-width: 640px;
+            margin: 20px auto;
+            padding: 10px;
+            background: #f0f0f0;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Canvas Overlay Debug Test</h1>
+    
+    <div style="text-align: center;">
+        <button onclick="startCamera()">Start Camera</button>
+        <button onclick="drawTestBox()">Draw Test Box</button>
+        <button onclick="testDetection()">Test Backend Detection</button>
+    </div>
+    
+    <div class="container">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="overlay"></canvas>
+    </div>
+    
+    <div class="info">
+        <h3>Debug Info:</h3>
+        <pre id="debug"></pre>
+    </div>
+    
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        const debugEl = document.getElementById('debug');
+        
+        let animationId = null;
+        let lastBox = null;
+        
+        function log(msg) {
+            console.log(msg);
+            debugEl.textContent += msg + '\n';
+        }
+        
+        async function startCamera() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                
+                video.srcObject = stream;
+                
+                video.onloadedmetadata = () => {
+                    log(`✅ Video loaded`);
+                    log(`📹 Native: ${video.videoWidth}x${video.videoHeight}`);
+                    log(`📺 Display: ${video.clientWidth}x${video.clientHeight}`);
+                    
+                    // Size canvas
+                    canvas.width = video.clientWidth;
+                    canvas.height = video.clientHeight;
+                    log(`🎨 Canvas: ${canvas.width}x${canvas.height}`);
+                    
+                    // Start animation loop
+                    startDrawLoop();
+                    
+                    // Start detection
+                    setInterval(testDetection, 1000);
+                };
+            } catch (error) {
+                log(`❌ Camera error: ${error.message}`);
+            }
+        }
+        
+        function startDrawLoop() {
+            function draw() {
+                // Clear
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw test box if exists
+                if (lastBox) {
+                    const scaleX = video.clientWidth / video.videoWidth;
+                    const scaleY = video.clientHeight / video.videoHeight;
+                    
+                    const x = lastBox.x * scaleX;
+                    const y = lastBox.y * scaleY;
+                    const w = lastBox.w * scaleX;
+                    const h = lastBox.h * scaleY;
+                    
+                    ctx.strokeStyle = '#00FF00';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(x, y, w, h);
+                    
+                    log(`🎨 Drew box at (${x.toFixed(0)}, ${y.toFixed(0)}, ${w.toFixed(0)}, ${h.toFixed(0)})`);
+                }
+                
+                animationId = requestAnimationFrame(draw);
+            }
+            draw();
+        }
+        
+        function drawTestBox() {
+            // Draw a test box in the center
+            lastBox = {
+                x: video.videoWidth / 2 - 100,
+                y: video.videoHeight / 2 - 100,
+                w: 200,
+                h: 200
+            };
+            log(`📦 Test box set: ${JSON.stringify(lastBox)}`);
+        }
+        
+        async function testDetection() {
+            if (!video.srcObject) {
+                log('❌ Camera not started');
+                return;
+            }
+            
+            try {
+                // Capture frame
+                const captureCanvas = document.createElement('canvas');
+                captureCanvas.width = video.videoWidth;
+                captureCanvas.height = video.videoHeight;
+                const captureCtx = captureCanvas.getContext('2d');
+                captureCtx.drawImage(video, 0, 0);
+                
+                // Convert to blob
+                const blob = await new Promise(resolve => {
+                    captureCanvas.toBlob(resolve, 'image/jpeg', 0.8);
+                });
+                
+                // Send to backend
+                const formData = new FormData();
+                formData.append('image', blob);
+                
+                log('📤 Sending detection request...');
+                const response = await fetch('http://localhost:5000/api/attendance/detect-face', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'Authorization': 'Bearer ' + localStorage.getItem('token')
+                    }
+                });
+                
+                const data = await response.json();
+                log(`📥 Response: ${JSON.stringify(data)}`);
+                
+                if (data.status === 'success' && data.faces && data.faces.length > 0) {
+                    lastBox = data.faces[0].bbox;
+                    log(`✅ Face detected: ${JSON.stringify(lastBox)}`);
+                } else {
+                    log('⚠️ No face detected');
+                    lastBox = null;
+                }
+            } catch (error) {
+                log(`❌ Detection error: ${error.message}`);
+            }
+        }
+    </script>
+</body>
+</html>
