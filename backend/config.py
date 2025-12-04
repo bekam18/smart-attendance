@@ -9,9 +9,16 @@ class Config:
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
     DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     
-    # MongoDB
-    MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-    MONGODB_DB_NAME = os.getenv('MONGODB_DB_NAME', 'smart_attendance')
+    # MySQL Database
+    MYSQL_HOST = os.getenv('MYSQL_HOST', 'localhost')
+    MYSQL_PORT = int(os.getenv('MYSQL_PORT', '3306'))
+    MYSQL_DATABASE = os.getenv('MYSQL_DATABASE', 'smart_attendance')
+    MYSQL_USER = os.getenv('MYSQL_USER', 'root')
+    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD', '')
+    
+    # MongoDB (Legacy - for migration reference)
+    # MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
+    # MONGODB_DB_NAME = os.getenv('MONGODB_DB_NAME', 'smart_attendance')
     
     # JWT
     JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', SECRET_KEY)

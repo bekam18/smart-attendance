@@ -2,7 +2,7 @@ import bcrypt
 from functools import wraps
 from flask import jsonify, request
 from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
-from db.mongo import get_db
+from db.mysql import get_db
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
@@ -32,11 +32,13 @@ def role_required(*allowed_roles):
             # At this point, @jwt_required() has already verified the JWT
             # We can safely call get_jwt_identity() without RuntimeError
             user_id = get_jwt_identity()
+            print(f"SECURITY DEBUG: Checking role for user {user_id}")
             
             db = get_db()
-            # Convert string ID to ObjectId
-            from bson import ObjectId
-            user = db.users.find_one({'_id': ObjectId(user_id)})
+            result = db.execute_query("SELECT * FROM users WHERE id = %s", (user_id,))
+            print(f"SECURITY DEBUG: Query result type: {type(result)}, length: {len(result) if result else 0}")
+            user = result[0] if result else None
+            print(f"SECURITY DEBUG: User extracted: {user is not None}")
             
             if not user:
                 print(f"❌ User not found with ID: {user_id}")

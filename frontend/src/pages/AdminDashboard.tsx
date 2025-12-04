@@ -21,11 +21,13 @@ export default function AdminDashboard() {
     email: '',
     name: '',
     department: '',
-    course_name: '',
+    course_name: '',  // Keep for backward compatibility
+    courses: [] as string[],  // New multi-course field
     class_year: '',
     lab_session: false,
     theory_session: false
   });
+  const [newCourse, setNewCourse] = useState('');
   const [studentFormData, setStudentFormData] = useState({
     username: '',
     password: '',
@@ -65,6 +67,12 @@ export default function AdminDashboard() {
   const handleAddInstructor = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    // Validate at least one course
+    if (instructorFormData.courses.length === 0) {
+      toast.error('Please add at least one course');
+      return;
+    }
+    
     // Validate at least one session type is selected
     if (!instructorFormData.lab_session && !instructorFormData.theory_session) {
       toast.error('Please select at least one session type (Lab or Theory)');
@@ -82,10 +90,12 @@ export default function AdminDashboard() {
         name: '', 
         department: '',
         course_name: '',
+        courses: [],
         class_year: '',
         lab_session: false,
         theory_session: false
       });
+      setNewCourse('');
       loadData();
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to add instructor');
@@ -341,14 +351,77 @@ export default function AdminDashboard() {
                 onChange={(e) => setInstructorFormData({ ...instructorFormData, department: e.target.value })}
                 className="px-4 py-2 border rounded-lg"
               />
-              <input
-                type="text"
-                placeholder="Course Name"
-                value={instructorFormData.course_name}
-                onChange={(e) => setInstructorFormData({ ...instructorFormData, course_name: e.target.value })}
-                className="px-4 py-2 border rounded-lg"
-                required
-              />
+              {/* Multi-Course Input */}
+              <div className="col-span-2 border rounded-lg p-4 bg-gray-50">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Courses <span className="text-red-500">*</span>
+                </label>
+                
+                {/* Display added courses */}
+                {instructorFormData.courses.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    {instructorFormData.courses.map((course, index) => (
+                      <span
+                        key={index}
+                        className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-blue-100 text-blue-800"
+                      >
+                        {course}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newCourses = instructorFormData.courses.filter((_, i) => i !== index);
+                            setInstructorFormData({ ...instructorFormData, courses: newCourses });
+                          }}
+                          className="ml-2 text-blue-600 hover:text-blue-800 font-bold"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                
+                {/* Add course input */}
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    placeholder="Type course name..."
+                    value={newCourse}
+                    onChange={(e) => setNewCourse(e.target.value)}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (newCourse.trim()) {
+                          setInstructorFormData({
+                            ...instructorFormData,
+                            courses: [...instructorFormData.courses, newCourse.trim()]
+                          });
+                          setNewCourse('');
+                        }
+                      }
+                    }}
+                    className="flex-1 px-4 py-2 border rounded-lg"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (newCourse.trim()) {
+                        setInstructorFormData({
+                          ...instructorFormData,
+                          courses: [...instructorFormData.courses, newCourse.trim()]
+                        });
+                        setNewCourse('');
+                      }
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                  >
+                    Add Course
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  {instructorFormData.courses.length} course(s) added. Press Enter or click "Add Course" to add.
+                </p>
+              </div>
               <input
                 type="text"
                 placeholder="Class Year (e.g., 2nd Year)"
@@ -561,7 +634,19 @@ export default function AdminDashboard() {
                   <td className="px-6 py-4 whitespace-nowrap">{instructor.name}</td>
                   <td className="px-6 py-4 whitespace-nowrap">{instructor.username}</td>
                   <td className="px-6 py-4 whitespace-nowrap">{instructor.email}</td>
-                  <td className="px-6 py-4 whitespace-nowrap">{instructor.course_name || '-'}</td>
+                  <td className="px-6 py-4">
+                    {instructor.courses && instructor.courses.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {instructor.courses.map((course: string, idx: number) => (
+                          <span key={idx} className="px-2 py-1 rounded-full text-xs bg-green-100 text-green-800">
+                            {course}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400">{instructor.course_name || '-'}</span>
+                    )}
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap">{instructor.class_year || '-'}</td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex gap-1">

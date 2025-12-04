@@ -5,7 +5,6 @@ Handles base64 images, file uploads, and all error scenarios gracefully
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from bson import ObjectId
 from datetime import datetime, date
 import logging
 import traceback
@@ -15,7 +14,7 @@ import io
 from PIL import Image
 import numpy as np
 
-from db.mongo import get_db
+from db.mysql import get_db
 from utils.security import role_required
 
 attendance_bp = Blueprint('attendance', __name__)
@@ -258,7 +257,7 @@ def recognize_face():
         db = get_db()
         
         try:
-            session = db.sessions.find_one({'_id': ObjectId(session_id)})
+            session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (session_id,))
         except Exception as e:
             print(f"✗ Invalid session ID format: {e}")
             return jsonify({
@@ -267,13 +266,15 @@ def recognize_face():
                 'message': str(e)
             }), 400
         
-        if not session:
+        if not session_result:
             print(f"✗ Session not found: {session_id}")
             return jsonify({
                 'status': 'error',
                 'error': 'Session not found',
                 'message': f'Session {session_id} does not exist'
             }), 404
+        
+        session = session_result[0]  # Get the first result
         
         if session.get('status') != 'active':
             print(f"✗ Session not active: {session.get('status')}")
@@ -364,35 +365,62 @@ def recognize_face():
             print(f"✓ Recognized: {student_id} (confidence: {confidence:.4f})")
             
             # Get student info
-            student = db.students.find_one({'student_id': student_id})
+            student_result = db.execute_query('SELECT * FROM students WHERE student_id = %s', (student_id,))
             
-            if not student:
+            if not student_result:
                 print(f"✗ Student not in database: {student_id}")
                 return jsonify({
                     'status': 'unknown',
                     'message': f'Student {student_id} not found in database'
                 }), 200
             
+            student = student_result[0]  # Get the first result
+            
+            # ============================================================
+            # VALIDATE STUDENT SECTION/YEAR MATCHES SESSION
+            # ============================================================
+            student_section = student.get('section', '')
+            student_year = student.get('year', '')
+            session_section = session.get('section_id', '')
+            session_year = session.get('year', '')
+            
+            if student_section != session_section or student_year != session_year:
+                print(f"✗ SECTION/YEAR MISMATCH:")
+                print(f"  Student: {student.get('name')} ({student_id})")
+                print(f"  Student Section/Year: {student_section}, {student_year}")
+                print(f"  Session Section/Year: {session_section}, {session_year}")
+                print(f"  → REJECTED: Student not in this class")
+                sys.stdout.flush()
+                
+                return jsonify({
+                    'status': 'wrong_section',
+                    'message': f'{student.get("name")} is not in this class (Section {student_section}, {student_year})',
+                    'student_id': student_id,
+                    'student_name': student.get('name'),
+                    'student_section': student_section,
+                    'student_year': student_year,
+                    'session_section': session_section,
+                    'session_year': session_year
+                }), 200
+            
+            print(f"✓ Section/Year validated: {student_section}, {student_year}")
+            
             # Check if already marked present in this session
             today = date.today().isoformat()
-            existing = db.attendance.find_one({
-                'student_id': student_id,
-                'session_id': session_id,
-                'date': today
-            })
+            existing_result = db.execute_query(
+                'SELECT * FROM attendance WHERE student_id = %s AND session_id = %s AND date = %s',
+                (student_id, session_id, today)
+            )
+            existing = existing_result[0] if existing_result else None
             
             if existing:
                 # UPDATE TIMESTAMP ONLY - DO NOT CREATE NEW ENTRY
                 print(f"⚠ Already marked: {student.get('name')} - Updating timestamp only")
                 
-                db.attendance.update_one(
-                    {'_id': existing['_id']},
-                    {
-                        '$set': {
-                            'timestamp': datetime.utcnow(),
-                            'confidence': confidence  # Update confidence too
-                        }
-                    }
+                db.execute_query(
+                    'UPDATE attendance SET timestamp = %s, confidence = %s WHERE id = %s',
+                    (datetime.utcnow(), confidence, existing['id']),
+                    fetch=False
                 )
                 
                 print(f"✓ Timestamp updated for: {student.get('name')}")
@@ -425,15 +453,27 @@ def recognize_face():
                 'status': 'present'
             }
             
-            db.attendance.insert_one(attendance_doc)
+            db.execute_query(
+                '''INSERT INTO attendance 
+                   (student_id, session_id, instructor_id, section_id, year, 
+                    session_type, time_block, course_name, class_year, 
+                    timestamp, date, confidence, status) 
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                (attendance_doc['student_id'], attendance_doc['session_id'], 
+                 attendance_doc['instructor_id'], attendance_doc['section_id'], 
+                 attendance_doc['year'], attendance_doc['session_type'], 
+                 attendance_doc['time_block'], attendance_doc['course_name'], 
+                 attendance_doc['class_year'], attendance_doc['timestamp'], 
+                 attendance_doc['date'], attendance_doc['confidence'], 
+                 attendance_doc['status']),
+                fetch=False
+            )
             
-            # Update session count and present students list (only for NEW entries)
-            db.sessions.update_one(
-                {'_id': ObjectId(session_id)},
-                {
-                    '$inc': {'attendance_count': 1},
-                    '$addToSet': {'present_students': student_id}
-                }
+            # Update session count (only for NEW entries)
+            db.execute_query(
+                'UPDATE sessions SET attendance_count = attendance_count + 1 WHERE id = %s',
+                (session_id,),
+                fetch=False
             )
             
             print(f"✓ NEW attendance recorded: {student.get('name')}")
@@ -483,7 +523,12 @@ def start_session():
         data = request.get_json()
         
         db = get_db()
-        instructor = db.users.find_one({'_id': ObjectId(user_id)})
+        instructor_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        
+        if not instructor_result:
+            return jsonify({'error': 'Instructor not found'}), 404
+        
+        instructor = instructor_result[0]  # Get the first result
         
         # Validate session_type is provided
         session_type = data.get('session_type')
@@ -501,8 +546,16 @@ def start_session():
                 'message': 'time_block must be "morning" or "afternoon"'
             }), 400
         
+        # Parse instructor session types from JSON
+        import json
+        instructor_session_types = []
+        if instructor.get('session_types'):
+            try:
+                instructor_session_types = json.loads(instructor['session_types'])
+            except (json.JSONDecodeError, TypeError):
+                instructor_session_types = []
+        
         # Validate instructor has access to this session type
-        instructor_session_types = instructor.get('session_types', [])
         if session_type not in instructor_session_types:
             return jsonify({
                 'error': 'Unauthorized session type',
@@ -525,6 +578,9 @@ def start_session():
                 'message': 'Please provide a year'
             }), 400
         
+        # Get course from request data, fallback to instructor's first course
+        course = data.get('course', '') or instructor.get('course_name', '')
+        
         session_doc = {
             'instructor_id': user_id,
             'instructor_name': instructor.get('name', 'Unknown'),
@@ -532,10 +588,10 @@ def start_session():
             'year': year,
             'session_type': session_type,  # 'lab' or 'theory'
             'time_block': time_block,  # 'morning' or 'afternoon'
-            'course_name': instructor.get('course_name', ''),
+            'course_name': course,  # Use the selected course from the form
             'class_year': instructor.get('class_year', ''),
             'name': data.get('name', f"Session {datetime.now().strftime('%Y-%m-%d %H:%M')}"),
-            'course': data.get('course', ''),
+            'course': course,  # Store in both fields for compatibility
             'start_time': datetime.utcnow(),
             'end_time': None,
             'status': 'active',
@@ -544,15 +600,28 @@ def start_session():
             'absent_students': []    # Track absent students (if needed)
         }
         
-        result = db.sessions.insert_one(session_doc)
+        session_id = db.execute_query(
+            '''INSERT INTO sessions 
+               (instructor_id, instructor_name, section_id, year, 
+                session_type, time_block, course_name, class_year, 
+                name, start_time, status, attendance_count) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+            (session_doc['instructor_id'], session_doc['instructor_name'], 
+             session_doc['section_id'], session_doc['year'], 
+             session_doc['session_type'], session_doc['time_block'], 
+             session_doc['course_name'], session_doc['class_year'], 
+             session_doc['name'], session_doc['start_time'], 
+             session_doc['status'], session_doc['attendance_count']),
+            fetch=False
+        )
         
         print(f"✅ Session started: {session_type} - {time_block} - {session_doc['name']}")
         
         return jsonify({
             'message': 'Session started successfully',
-            'session_id': str(result.inserted_id),
+            'session_id': str(session_id),
             'session': {
-                'id': str(result.inserted_id),
+                'id': str(session_id),
                 'name': session_doc['name'],
                 'session_type': session_type,
                 'time_block': time_block,
@@ -585,24 +654,22 @@ def end_session():
         db = get_db()
         
         # Verify session belongs to this instructor
-        session = db.sessions.find_one({'_id': ObjectId(data['session_id'])})
+        session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (data['session_id'],))
+        session = session_result[0] if session_result else None
+        
         if not session:
             return jsonify({'error': 'Session not found'}), 404
         
-        if session.get('instructor_id') != user_id:
+        if str(session.get('instructor_id')) != str(user_id):
             return jsonify({
                 'error': 'Unauthorized',
                 'message': 'You can only end your own sessions'
             }), 403
         
-        result = db.sessions.update_one(
-            {'_id': ObjectId(data['session_id'])},
-            {
-                '$set': {
-                    'end_time': datetime.utcnow(),
-                    'status': 'completed'
-                }
-            }
+        db.execute_query(
+            'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
+            (datetime.utcnow(), 'completed', data['session_id']),
+            fetch=False
         )
         
         return jsonify({'message': 'Session ended successfully'}), 200
@@ -611,6 +678,98 @@ def end_session():
         logger.error(f"Error ending session: {e}", exc_info=True)
         return jsonify({
             'error': 'Failed to end session',
+            'message': str(e)
+        }), 500
+
+
+@attendance_bp.route('/mark-absent', methods=['POST'])
+@jwt_required()
+@role_required('instructor')
+def mark_absent_students():
+    """Mark absent students when camera is stopped"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if 'session_id' not in data:
+            return jsonify({'error': 'Session ID required'}), 400
+        
+        session_id = data['session_id']
+        db = get_db()
+        
+        # Get session info
+        session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (session_id,))
+        if not session_result:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        session = session_result[0]
+        
+        # Verify session belongs to this instructor
+        if str(session.get('instructor_id')) != str(user_id):
+            return jsonify({
+                'error': 'Unauthorized',
+                'message': 'You can only mark absents for your own sessions'
+            }), 403
+        
+        # Get all students in this section and year
+        all_students_result = db.execute_query(
+            'SELECT student_id, name FROM students WHERE section = %s AND year = %s',
+            (session.get('section_id'), session.get('year'))
+        )
+        
+        if not all_students_result:
+            return jsonify({
+                'message': 'No students found in this section/year',
+                'absent_count': 0
+            }), 200
+        
+        # Get students who are already marked present
+        today = date.today().isoformat()
+        present_students_result = db.execute_query(
+            'SELECT DISTINCT student_id FROM attendance WHERE session_id = %s AND date = %s',
+            (session_id, today)
+        )
+        
+        present_student_ids = [row['student_id'] for row in present_students_result] if present_students_result else []
+        
+        # Mark absent students
+        absent_count = 0
+        for student in all_students_result:
+            student_id = student['student_id']
+            
+            if student_id not in present_student_ids:
+                # Mark as absent
+                db.execute_query(
+                    '''INSERT INTO attendance 
+                       (student_id, session_id, instructor_id, section_id, year,
+                        session_type, time_block, course_name, class_year,
+                        timestamp, date, confidence, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                    (student_id, session_id, session.get('instructor_id'),
+                     session.get('section_id'), session.get('year'),
+                     session.get('session_type'), session.get('time_block'),
+                     session.get('course_name'), session.get('class_year'),
+                     datetime.utcnow(), today, 0.0, 'absent'),
+                    fetch=False
+                )
+                absent_count += 1
+                logger.info(f"Marked {student_id} as absent for session {session_id}")
+        
+        logger.info(f"Marked {absent_count} students as absent for session {session_id}")
+        
+        return jsonify({
+            'message': f'Successfully marked {absent_count} students as absent',
+            'absent_count': absent_count,
+            'total_students': len(all_students_result),
+            'present_count': len(present_student_ids)
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error marking absent students: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': 'Failed to mark absent students',
             'message': str(e)
         }), 500
 
@@ -624,48 +783,55 @@ def get_session_attendance(session_id):
         user_id = get_jwt_identity()
         db = get_db()
         
-        user = db.users.find_one({'_id': ObjectId(user_id)})
-        
-        session = db.sessions.find_one({'_id': ObjectId(session_id)})
-        
-        if not session:
+        # Get session info
+        session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (session_id,))
+        if not session_result:
             return jsonify({'error': 'Session not found'}), 404
         
-        # Instructors can only view their own sessions
-        if user['role'] == 'instructor' and session.get('instructor_id') != user_id:
-            return jsonify({
-                'error': 'Unauthorized',
-                'message': 'You can only view your own sessions'
-            }), 403
+        session = session_result[0]
         
-        # Get attendance records
-        attendance_records = db.attendance.find({'session_id': session_id})
+        # Get attendance records for this session
+        attendance_result = db.execute_query(
+            'SELECT * FROM attendance WHERE session_id = %s ORDER BY timestamp DESC',
+            (session_id,)
+        )
         
-        records = []
-        for record in attendance_records:
-            student = db.students.find_one({'student_id': record['student_id']})
+        # Build attendance list with student info
+        attendance_list = []
+        for record in attendance_result:
+            student_result = db.execute_query('SELECT * FROM students WHERE student_id = %s', (record['student_id'],))
+            student = student_result[0] if student_result else None
             
-            records.append({
+            attendance_list.append({
+                'id': str(record['id']),
                 'student_id': record['student_id'],
                 'student_name': student['name'] if student else 'Unknown',
-                'timestamp': record['timestamp'].isoformat(),
-                'confidence': record.get('confidence', 0)
+                'timestamp': record['timestamp'].isoformat() if record.get('timestamp') else None,
+                'confidence': float(record.get('confidence', 0)) if record.get('confidence') else 0,
+                'status': record.get('status', 'present')
             })
         
         return jsonify({
             'session': {
-                'id': str(session['_id']),
-                'name': session['name'],
+                'id': str(session['id']),
+                'name': session.get('name', 'Unknown Session'),
+                'instructor_name': session.get('instructor_name', 'Unknown'),
                 'section_id': session.get('section_id', ''),
-                'start_time': session['start_time'].isoformat(),
-                'status': session['status'],
+                'year': session.get('year', ''),
+                'session_type': session.get('session_type', ''),
+                'time_block': session.get('time_block', ''),
+                'course_name': session.get('course_name', ''),
+                'start_time': session['start_time'].isoformat() if session.get('start_time') else None,
+                'end_time': session['end_time'].isoformat() if session.get('end_time') else None,
+                'status': session.get('status', 'unknown'),
                 'attendance_count': session.get('attendance_count', 0)
             },
-            'attendance': records
+            'attendance': attendance_list
         }), 200
     
     except Exception as e:
-        logger.error(f"Error getting session attendance: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'error': 'Failed to get session attendance',
             'message': str(e)
@@ -681,24 +847,28 @@ def get_sessions():
         user_id = get_jwt_identity()
         db = get_db()
         
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        user = user_result[0] if user_result else None
         
-        query = {}
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Build query based on user role
         if user['role'] == 'instructor':
-            query['instructor_id'] = user_id
-        
-        sessions = db.sessions.find(query).sort('start_time', -1)
+            sessions = db.execute_query('SELECT * FROM sessions WHERE instructor_id = %s ORDER BY start_time DESC', (user_id,))
+        else:
+            sessions = db.execute_query('SELECT * FROM sessions ORDER BY start_time DESC')
         
         session_list = []
         for session in sessions:
             session_list.append({
-                'id': str(session['_id']),
-                'name': session['name'],
+                'id': str(session['id']),  # Use 'id' instead of '_id'
+                'name': session.get('name', 'Unknown Session'),
                 'instructor_name': session.get('instructor_name', 'Unknown'),
-                'course': session.get('course', ''),
-                'start_time': session['start_time'].isoformat(),
+                'course': session.get('course_name', ''),  # Use 'course_name' from schema
+                'start_time': session['start_time'].isoformat() if session.get('start_time') else None,
                 'end_time': session['end_time'].isoformat() if session.get('end_time') else None,
-                'status': session['status'],
+                'status': session.get('status', 'unknown'),
                 'attendance_count': session.get('attendance_count', 0)
             })
         

@@ -4,10 +4,9 @@ Instructor-specific endpoints for records, settings, and exports
 
 from flask import Blueprint, request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from bson import ObjectId
 from datetime import datetime
 from utils.security import role_required, hash_password, verify_password
-from db.mongo import get_db
+from db.mysql import get_db
 import csv
 import io
 import logging
@@ -33,66 +32,84 @@ def get_attendance_records():
         end_date = request.args.get('end_date')
         student_id = request.args.get('student_id')
         session_id = request.args.get('session_id')
+        section_id = request.args.get('section_id')
         
-        # Build query
-        query = {}
+        # Get user info
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'User not found'}), 404
+        user = user_result[0]
+        
+        # Build SQL query with filters
+        sql = 'SELECT * FROM attendance WHERE 1=1'
+        params = []
         
         # CRITICAL: Filter by instructor_id for instructors (admins see all)
-        user = db.users.find_one({'_id': ObjectId(user_id)})
         if user['role'] == 'instructor':
-            # Direct filter on attendance records by instructor_id
-            query['instructor_id'] = user_id
+            sql += ' AND instructor_id = %s'
+            params.append(user_id)
             logger.info(f"Instructor {user_id} - filtering by instructor_id")
         
         # Date range filter
-        if start_date or end_date:
-            date_query = {}
-            if start_date:
-                date_query['$gte'] = start_date
-            if end_date:
-                date_query['$lte'] = end_date
-            if date_query:
-                query['date'] = date_query
+        if start_date:
+            sql += ' AND date >= %s'
+            params.append(start_date)
+        if end_date:
+            sql += ' AND date <= %s'
+            params.append(end_date)
         
         # Student filter
         if student_id:
-            query['student_id'] = student_id
+            sql += ' AND student_id = %s'
+            params.append(student_id)
         
         # Session filter
         if session_id:
-            query['session_id'] = session_id
+            sql += ' AND session_id = %s'
+            params.append(session_id)
         
-        logger.info(f"Fetching records with query: {query}")
+        # Section filter
+        if section_id:
+            sql += ' AND section_id = %s'
+            params.append(section_id)
+        
+        sql += ' ORDER BY timestamp DESC LIMIT 1000'
+        
+        logger.info(f"Fetching records with SQL: {sql}, params: {params}")
         
         # Get records
-        records = list(db.attendance.find(query).sort('timestamp', -1).limit(1000))
+        records = db.execute_query(sql, tuple(params) if params else None)
         
         result = []
         for record in records:
-            student = db.students.find_one({'student_id': record['student_id']})
-            session = db.sessions.find_one({'_id': ObjectId(record['session_id'])})
+            student_result = db.execute_query('SELECT * FROM students WHERE student_id = %s', (record['student_id'],))
+            student = student_result[0] if student_result else None
+            session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (record['session_id'],))
+            session = session_result[0] if session_result else None
             
             result.append({
-                'id': str(record['_id']),
+                'id': str(record['id']),  # Use 'id' not '_id'
                 'student_id': record['student_id'],
                 'student_name': student['name'] if student else 'Unknown',
-                'session_id': record['session_id'],
+                'session_id': str(record['session_id']),
                 'session_name': session['name'] if session else 'Unknown',
                 'section_id': record.get('section_id', ''),
                 'year': record.get('year', ''),
                 'course_name': record.get('course_name', ''),
                 'session_type': record.get('session_type', ''),
-                'date': record['date'],
-                'timestamp': record['timestamp'].isoformat(),
-                'confidence': record.get('confidence', 0),
+                'date': str(record['date']),
+                'timestamp': record['timestamp'].isoformat() if record.get('timestamp') else None,
+                'confidence': float(record.get('confidence', 0)) if record.get('confidence') else 0,
                 'status': record.get('status', 'present')
             })
         
-        logger.info(f"Returning {len(result)} records for instructor {user_id}")
+        logger.info(f"Returning {len(result)} records for user {user_id}")
         return jsonify(result), 200
     
     except Exception as e:
         logger.error(f"Error fetching records: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': 'Failed to fetch records', 'message': str(e)}), 500
 
 
@@ -110,30 +127,44 @@ def export_csv():
         end_date = request.args.get('end_date')
         student_id = request.args.get('student_id')
         session_id = request.args.get('session_id')
+        section_id = request.args.get('section_id')
         
-        # Build query (same as get_attendance_records)
-        query = {}
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        # Get user info
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'User not found'}), 404
+        user = user_result[0]
+        
+        # Build SQL query with filters (same as get_attendance_records)
+        sql = 'SELECT * FROM attendance WHERE 1=1'
+        params = []
+        
         if user['role'] == 'instructor':
-            # CRITICAL: Filter by instructor_id
-            query['instructor_id'] = user_id
+            sql += ' AND instructor_id = %s'
+            params.append(user_id)
         
-        if start_date or end_date:
-            date_query = {}
-            if start_date:
-                date_query['$gte'] = start_date
-            if end_date:
-                date_query['$lte'] = end_date
-            if date_query:
-                query['date'] = date_query
+        if start_date:
+            sql += ' AND date >= %s'
+            params.append(start_date)
+        if end_date:
+            sql += ' AND date <= %s'
+            params.append(end_date)
         
         if student_id:
-            query['student_id'] = student_id
+            sql += ' AND student_id = %s'
+            params.append(student_id)
         if session_id:
-            query['session_id'] = session_id
+            sql += ' AND session_id = %s'
+            params.append(session_id)
+        
+        if section_id:
+            sql += ' AND section_id = %s'
+            params.append(section_id)
+        
+        sql += ' ORDER BY timestamp DESC LIMIT 1000'
         
         # Get records
-        records = list(db.attendance.find(query).sort('timestamp', -1))
+        records = db.execute_query(sql, tuple(params) if params else None)
         
         # Create CSV in memory
         output = io.StringIO()
@@ -144,8 +175,10 @@ def export_csv():
         
         # Write data
         for record in records:
-            student = db.students.find_one({'student_id': record['student_id']})
-            session = db.sessions.find_one({'_id': ObjectId(record['session_id'])})
+            student_result = db.execute_query('SELECT * FROM students WHERE student_id = %s', (record['student_id'],))
+            student = student_result[0] if student_result else None
+            session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (record['session_id'],))
+            session = session_result[0] if session_result else None
             
             writer.writerow([
                 record['date'],
@@ -196,30 +229,44 @@ def export_excel():
         end_date = request.args.get('end_date')
         student_id = request.args.get('student_id')
         session_id = request.args.get('session_id')
+        section_id = request.args.get('section_id')
         
-        # Build query
-        query = {}
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        # Get user info
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'User not found'}), 404
+        user = user_result[0]
+        
+        # Build SQL query with filters (same as get_attendance_records)
+        sql = 'SELECT * FROM attendance WHERE 1=1'
+        params = []
+        
         if user['role'] == 'instructor':
-            # CRITICAL: Filter by instructor_id
-            query['instructor_id'] = user_id
+            sql += ' AND instructor_id = %s'
+            params.append(user_id)
         
-        if start_date or end_date:
-            date_query = {}
-            if start_date:
-                date_query['$gte'] = start_date
-            if end_date:
-                date_query['$lte'] = end_date
-            if date_query:
-                query['date'] = date_query
+        if start_date:
+            sql += ' AND date >= %s'
+            params.append(start_date)
+        if end_date:
+            sql += ' AND date <= %s'
+            params.append(end_date)
         
         if student_id:
-            query['student_id'] = student_id
+            sql += ' AND student_id = %s'
+            params.append(student_id)
         if session_id:
-            query['session_id'] = session_id
+            sql += ' AND session_id = %s'
+            params.append(session_id)
+        
+        if section_id:
+            sql += ' AND section_id = %s'
+            params.append(section_id)
+        
+        sql += ' ORDER BY timestamp DESC LIMIT 1000'
         
         # Get records
-        records = list(db.attendance.find(query).sort('timestamp', -1))
+        records = db.execute_query(sql, tuple(params) if params else None)
         
         # Create workbook
         wb = openpyxl.Workbook()
@@ -239,8 +286,10 @@ def export_excel():
         
         # Write data
         for row_idx, record in enumerate(records, 2):
-            student = db.students.find_one({'student_id': record['student_id']})
-            session = db.sessions.find_one({'_id': ObjectId(record['session_id'])})
+            student_result = db.execute_query('SELECT * FROM students WHERE student_id = %s', (record['student_id'],))
+            student = student_result[0] if student_result else None
+            session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (record['session_id'],))
+            session = session_result[0] if session_result else None
             
             ws.cell(row=row_idx, column=1, value=record['date'])
             ws.cell(row=row_idx, column=2, value=record['timestamp'].strftime('%H:%M:%S'))
@@ -293,7 +342,8 @@ def get_settings():
         user_id = get_jwt_identity()
         db = get_db()
         
-        settings = db.user_settings.find_one({'user_id': user_id})
+        settings_result = db.execute_query('SELECT * FROM user_settings WHERE user_id = %s', (user_id,))
+        settings = settings_result[0] if settings_result else None
         
         if not settings:
             # Return defaults
@@ -332,11 +382,21 @@ def update_settings():
             'updated_at': datetime.utcnow()
         }
         
-        db.user_settings.update_one(
-            {'user_id': user_id},
-            {'$set': settings_doc},
-            upsert=True
-        )
+        # Check if settings exist, then update or insert
+        existing = db.execute_query('SELECT id FROM user_settings WHERE user_id = %s', (user_id,))
+        
+        if existing:
+            db.execute_query(
+                'UPDATE user_settings SET face_recognition_threshold = %s, updated_at = %s WHERE user_id = %s',
+                (settings_doc['face_recognition_threshold'], settings_doc['updated_at'], user_id),
+                fetch=False
+            )
+        else:
+            db.execute_query(
+                'INSERT INTO user_settings (user_id, face_recognition_threshold, updated_at) VALUES (%s, %s, %s)',
+                (user_id, settings_doc['face_recognition_threshold'], settings_doc['updated_at']),
+                fetch=False
+            )
         
         logger.info(f"Settings updated for user {user_id}")
         return jsonify({'message': 'Settings updated successfully'}), 200
@@ -365,14 +425,19 @@ def change_password():
         if len(new_password) < 6:
             return jsonify({'error': 'New password must be at least 6 characters'}), 400
         
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        user = user_result[0] if user_result else None
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
         
         if not verify_password(current_password, user['password']):
             return jsonify({'error': 'Current password is incorrect'}), 401
         
-        db.users.update_one(
-            {'_id': ObjectId(user_id)},
-            {'$set': {'password': hash_password(new_password)}}
+        db.execute_query(
+            'UPDATE users SET password = %s WHERE id = %s',
+            (hash_password(new_password), user_id),
+            fetch=False
         )
         
         logger.info(f"Password changed for user {user_id}")
@@ -392,9 +457,21 @@ def get_instructor_sections():
         user_id = get_jwt_identity()
         db = get_db()
         
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
         
-        sections = user.get('sections', [])
+        if not user_result:
+            return jsonify({'error': 'Instructor not found'}), 404
+        
+        user = user_result[0]  # Get the first result
+        
+        # Parse sections JSON
+        import json
+        sections = []
+        if user.get('sections'):
+            try:
+                sections = json.loads(user['sections'])
+            except (json.JSONDecodeError, TypeError):
+                sections = []
         
         return jsonify({
             'sections': sections,
@@ -415,19 +492,51 @@ def get_instructor_info():
         user_id = get_jwt_identity()
         db = get_db()
         
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
         
-        if not user:
+        if not user_result:
             return jsonify({'error': 'Instructor not found'}), 404
+        
+        user = user_result[0]  # Get the first (and only) result
+        
+        # Parse JSON fields
+        import json
+        session_types = []
+        sections = []
+        courses = []
+        
+        if user.get('session_types'):
+            try:
+                session_types = json.loads(user['session_types'])
+            except (json.JSONDecodeError, TypeError):
+                session_types = []
+        
+        if user.get('sections'):
+            try:
+                sections = json.loads(user['sections'])
+            except (json.JSONDecodeError, TypeError):
+                sections = []
+        
+        # Parse courses array (new multi-course field)
+        if user.get('courses'):
+            try:
+                courses = json.loads(user['courses'])
+            except (json.JSONDecodeError, TypeError):
+                courses = []
+        
+        # Backward compatibility: if no courses array, use course_name
+        if not courses and user.get('course_name'):
+            courses = [user['course_name']]
         
         return jsonify({
             'name': user.get('name', 'Unknown'),
             'email': user.get('email', ''),
             'department': user.get('department', ''),
-            'course_name': user.get('course_name', ''),
+            'course_name': user.get('course_name', ''),  # Keep for backward compatibility
+            'courses': courses,  # New multi-course field
             'class_year': user.get('class_year', ''),
-            'session_types': user.get('session_types', []),  # ['lab'], ['theory'], or ['lab', 'theory']
-            'sections': user.get('sections', [])
+            'session_types': session_types,
+            'sections': sections
         }), 200
     
     except Exception as e:
@@ -444,24 +553,26 @@ def get_students_list():
         user_id = get_jwt_identity()
         db = get_db()
         
-        user = db.users.find_one({'_id': ObjectId(user_id)})
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        user = user_result[0] if user_result else None
+        
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
         
         if user['role'] == 'instructor':
             # Get unique student IDs from instructor's attendance records
-            attendance_records = db.attendance.find(
-                {'instructor_id': user_id},
-                {'student_id': 1}
-            )
-            student_ids = list(set(record['student_id'] for record in attendance_records))
+            attendance_records = db.execute_query('SELECT DISTINCT student_id FROM attendance WHERE instructor_id = %s', (user_id,))
+            student_ids = [record['student_id'] for record in attendance_records]
             
-            # Get student details
-            students = list(db.students.find(
-                {'student_id': {'$in': student_ids}},
-                {'student_id': 1, 'name': 1}
-            ).sort('student_id', 1))
+            if student_ids:
+                # Create placeholders for IN clause
+                placeholders = ','.join(['%s'] * len(student_ids))
+                students = db.execute_query(f'SELECT student_id, name FROM students WHERE student_id IN ({placeholders}) ORDER BY student_id', student_ids)
+            else:
+                students = []
         else:
             # Admins see all students
-            students = list(db.students.find({}, {'student_id': 1, 'name': 1}).sort('student_id', 1))
+            students = db.execute_query('SELECT student_id, name FROM students ORDER BY student_id')
         
         result = [
             {

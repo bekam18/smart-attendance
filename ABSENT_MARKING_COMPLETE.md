@@ -1,4 +1,4 @@
-# ✅ Automatic Absent Marking - Implementation Complete
+# Automatic Absent Marking - Implementation Complete
 
 ## Status: READY FOR USE
 
@@ -9,7 +9,7 @@ The automatic absent marking feature is now fully implemented and ready to use.
 ### 1. Backend Logic ✓
 **File**: `backend/blueprints/attendance.py`
 
-Enhanced the `end_session` endpoint to:
+Enhanced the `stop camera ` endpoint to:
 - Query all students in the session's section and year
 - Identify students who were marked present
 - Calculate which students were absent
@@ -22,8 +22,8 @@ Enhanced the `end_session` endpoint to:
 - `frontend/src/pages/AdminAllRecords.tsx` (updated status badges)
 
 Both pages now show:
-- 🟢 **Present** - Green badge for students who appeared
-- 🔴 **Absent** - Red badge for students who didn't appear
+-  **Present** - Green badge for students who appeared
+- **Absent** - Red badge for students who didn't appear
 
 ### 3. Testing Script ✓
 **Files**:
@@ -57,7 +57,7 @@ Test script verifies:
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ 3. INSTRUCTOR ENDS SESSION                                  │
+│ 3. INSTRUCTOR stop camera                                  │
 │    - System calculates: 10 total - 3 present = 7 absent   │
 │    - Automatically marks 7 students: ABSENT ✗              │
 └─────────────────────────────────────────────────────────────┘
@@ -115,7 +115,7 @@ When ending a session:
 ### For Instructors
 1. Start session → Select section & year
 2. Students appear → Automatically marked present
-3. End session → Absent students automatically marked
+3. stop camera  → Absent students automatically marked
 4. View records → See complete attendance with status badges
 5. Export → CSV/Excel includes present/absent status
 
@@ -132,7 +132,7 @@ When ending a session:
 3. Login as instructor
 4. Start session for Section A, 4th Year
 5. Let some students appear on camera
-6. End session
+6. close camera
 7. Check records → See present and absent students
 
 ### Automated Test
@@ -172,7 +172,7 @@ test_absent_marking.bat
 No configuration needed. Feature works automatically when:
 1. Students have `section` and `year` fields in database
 2. Sessions are created with `section_id` and `year`
-3. Instructor ends the session
+3. Instructor stop camera
 
 ## Troubleshooting
 

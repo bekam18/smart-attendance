@@ -4,7 +4,8 @@ from flask_jwt_extended import JWTManager
 import os
 
 from config import config
-from db.mongo import init_db
+# from db.mongo import init_db  # Replaced with MySQL
+from db.mysql import init_db
 from blueprints.auth import auth_bp
 from blueprints.admin import admin_bp
 from blueprints.students import students_bp

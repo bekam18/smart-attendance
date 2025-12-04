@@ -1,10 +1,9 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from bson import ObjectId
 from datetime import datetime
 import os
 
-from db.mongo import get_db
+from db.mysql import get_db
 from utils.security import hash_password, role_required
 from config import config
 
@@ -14,12 +13,22 @@ admin_bp = Blueprint('admin', __name__)
 @jwt_required()
 @role_required('admin')
 def add_instructor():
-    """Add a new instructor (admin only)"""
+    """Add a new instructor (admin only) - supports multiple courses"""
     data = request.get_json()
     
-    required_fields = ['username', 'password', 'email', 'name', 'course_name', 'class_year']
+    # Support both old format (course_name) and new format (courses array)
+    courses = data.get('courses', [])
+    if not courses and data.get('course_name'):
+        # Backward compatibility: convert single course to array
+        courses = [data['course_name']]
+    
+    required_fields = ['username', 'password', 'email', 'name', 'class_year']
     if not all(field in data for field in required_fields):
         return jsonify({'error': 'Missing required fields'}), 400
+    
+    # Validate at least one course
+    if not courses or len(courses) == 0:
+        return jsonify({'error': 'At least one course is required'}), 400
     
     # Validate session types - at least one must be selected
     lab_session = data.get('lab_session', False)
@@ -31,11 +40,10 @@ def add_instructor():
     db = get_db()
     
     # Check if username or email already exists
-    if db.users.find_one({'username': data['username']}):
-        return jsonify({'error': 'Username already exists'}), 409
-    
-    if db.users.find_one({'email': data['email']}):
-        return jsonify({'error': 'Email already exists'}), 409
+    existing_user = db.execute_query("SELECT id FROM users WHERE username = %s OR email = %s", 
+                                   (data['username'], data['email']))
+    if existing_user:
+        return jsonify({'error': 'Username or email already exists'}), 409
     
     # Build session types array
     session_types = []
@@ -44,51 +52,83 @@ def add_instructor():
     if theory_session:
         session_types.append('theory')
     
-    # Create instructor user
-    user_doc = {
-        'username': data['username'],
-        'password': hash_password(data['password']),
-        'email': data['email'],
-        'name': data['name'],
-        'role': 'instructor',
-        'department': data.get('department', ''),
-        'course_name': data['course_name'],
-        'class_year': str(data['class_year']),  # Ensure string format
-        'session_types': session_types,  # ['lab'], ['theory'], or ['lab', 'theory']
-        'created_at': datetime.utcnow()
-    }
+    # Create instructor user with courses array
+    import json
+    query = """
+        INSERT INTO users (username, password, email, name, role, department, course_name, courses, class_year, session_types, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    # Store first course in course_name for backward compatibility
+    first_course = courses[0] if courses else ''
     
-    result = db.users.insert_one(user_doc)
+    values = (
+        data['username'],
+        hash_password(data['password']),
+        data['email'],
+        data['name'],
+        'instructor',
+        data.get('department', ''),
+        first_course,  # Backward compatibility
+        json.dumps(courses),  # New multi-course field
+        str(data['class_year']),
+        json.dumps(session_types),
+        datetime.utcnow()
+    )
     
-    print(f"✅ Instructor added: {data['name']} - Course: {data['course_name']} - Year: {data['class_year']} - Sessions: {session_types}")
+    instructor_id = db.execute_query(query, values, fetch=False)
+    
+    print(f"✅ Instructor added: {data['name']} - Courses: {courses} - Year: {data['class_year']} - Sessions: {session_types}")
     
     return jsonify({
         'message': 'Instructor added successfully',
-        'instructor_id': str(result.inserted_id)
+        'instructor_id': str(instructor_id)
     }), 201
 
 @admin_bp.route('/instructors', methods=['GET'])
 @jwt_required()
 @role_required('admin')
 def get_instructors():
-    """Get all instructors (admin only)"""
+    """Get all instructors (admin only) - returns courses array"""
+    import json
     db = get_db()
     
-    instructors = db.users.find({'role': 'instructor'})
+    instructors = db.execute_query("SELECT * FROM users WHERE role = 'instructor'")
     
     instructor_list = []
     for instructor in instructors:
+        # Handle JSON session_types
+        session_types = []
+        if instructor.get('session_types'):
+            try:
+                session_types = json.loads(instructor['session_types'])
+            except (json.JSONDecodeError, TypeError):
+                # Fallback for comma-separated strings
+                session_types = instructor['session_types'].split(',') if isinstance(instructor['session_types'], str) else []
+        
+        # Handle courses array (new format) or course_name (old format)
+        courses = []
+        if instructor.get('courses'):
+            try:
+                courses = json.loads(instructor['courses'])
+            except (json.JSONDecodeError, TypeError):
+                courses = []
+        
+        # Backward compatibility: if no courses array, use course_name
+        if not courses and instructor.get('course_name'):
+            courses = [instructor['course_name']]
+        
         instructor_list.append({
-            'id': str(instructor['_id']),
+            'id': str(instructor['id']),
             'username': instructor['username'],
             'name': instructor['name'],
             'email': instructor['email'],
             'department': instructor.get('department', ''),
-            'course_name': instructor.get('course_name', ''),
+            'course_name': instructor.get('course_name', ''),  # Keep for backward compatibility
+            'courses': courses,  # New multi-course field
             'class_year': instructor.get('class_year', ''),
-            'session_types': instructor.get('session_types', []),
+            'session_types': session_types,
             'enabled': instructor.get('enabled', True),
-            'created_at': instructor['created_at'].isoformat()
+            'created_at': instructor['created_at'].isoformat() if instructor.get('created_at') else ''
         })
     
     return jsonify(instructor_list), 200
@@ -111,44 +151,52 @@ def add_student():
     db = get_db()
     
     # Check if username or email already exists
-    if db.users.find_one({'username': data['username']}):
-        print(f"❌ Username already exists: {data['username']}")
-        return jsonify({'error': 'Username already exists'}), 409
+    existing_user = db.execute_query("SELECT id FROM users WHERE username = %s OR email = %s", 
+                                   (data['username'], data['email']))
+    if existing_user:
+        print(f"❌ Username or email already exists: {data['username']}, {data['email']}")
+        return jsonify({'error': 'Username or email already exists'}), 409
     
-    if db.users.find_one({'email': data['email']}):
-        print(f"❌ Email already exists: {data['email']}")
-        return jsonify({'error': 'Email already exists'}), 409
-    
-    if db.students.find_one({'student_id': data['student_id']}):
+    # Check if student ID already exists
+    existing_student = db.execute_query("SELECT id FROM students WHERE student_id = %s", (data['student_id'],))
+    if existing_student:
         print(f"❌ Student ID already exists: {data['student_id']}")
         return jsonify({'error': 'Student ID already exists'}), 409
     
     # Create user
-    user_doc = {
-        'username': data['username'],
-        'password': hash_password(data['password']),
-        'email': data['email'],
-        'name': data['name'],
-        'role': 'student',
-        'created_at': datetime.utcnow()
-    }
+    user_query = """
+        INSERT INTO users (username, password, email, name, role, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    user_values = (
+        data['username'],
+        hash_password(data['password']),
+        data['email'],
+        data['name'],
+        'student',
+        datetime.utcnow()
+    )
     
-    user_result = db.users.insert_one(user_doc)
-    user_id = str(user_result.inserted_id)
+    user_id = db.execute_query(user_query, user_values, fetch=False)
     
     # Create student profile
-    student_doc = {
-        'user_id': user_id,
-        'student_id': data['student_id'],
-        'name': data['name'],
-        'email': data['email'],
-        'department': data.get('department', ''),
-        'year': data.get('year', ''),
-        'face_registered': False,
-        'created_at': datetime.utcnow()
-    }
+    student_query = """
+        INSERT INTO students (user_id, student_id, name, email, department, year, section, face_registered, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    student_values = (
+        user_id,
+        data['student_id'],
+        data['name'],
+        data['email'],
+        data.get('department', ''),
+        data.get('year', ''),
+        data.get('section', ''),
+        False,
+        datetime.utcnow()
+    )
     
-    db.students.insert_one(student_doc)
+    db.execute_query(student_query, student_values, fetch=False)
     
     print(f"✅ Student added successfully: {data['student_id']}")
     
@@ -164,24 +212,28 @@ def get_students():
     """Get all students"""
     db = get_db()
     
-    students = db.students.find()
+    # Join students with users to get enabled status
+    query = """
+        SELECT s.*, u.enabled 
+        FROM students s 
+        LEFT JOIN users u ON s.user_id = u.id
+    """
+    students = db.execute_query(query)
     
     student_list = []
     for student in students:
-        # Get user to check enabled status
-        user = db.users.find_one({'_id': ObjectId(student['user_id'])}) if student.get('user_id') else None
-        
         student_list.append({
-            'id': str(student['_id']),
+            'id': str(student['id']),
             'student_id': student['student_id'],
             'name': student['name'],
             'email': student['email'],
             'department': student.get('department', ''),
-            'year': student.get('year', ''),
+            'year_level': student.get('year', ''),  # Use 'year' from database
+            'year': student.get('year', ''),  # For compatibility
             'section': student.get('section', ''),
-            'face_registered': student.get('face_registered', False),
-            'enabled': user.get('enabled', True) if user else True,
-            'created_at': student['created_at'].isoformat()
+            'face_registered': bool(student.get('face_registered', False)),
+            'enabled': bool(student.get('enabled', True)),
+            'created_at': student['created_at'].isoformat() if student.get('created_at') else ''
         })
     
     return jsonify(student_list), 200
@@ -200,59 +252,57 @@ def get_all_attendance():
     section = request.args.get('section')
     instructor_id = request.args.get('instructor_id')
     
-    # Build query
-    query = {}
+    # Build WHERE clause
+    where_conditions = []
+    params = []
     
-    # Date range filter
-    if start_date or end_date:
-        date_query = {}
-        if start_date:
-            date_query['$gte'] = start_date
-        if end_date:
-            date_query['$lte'] = end_date
-        if date_query:
-            query['date'] = date_query
-    
-    # Student filter
+    if start_date:
+        where_conditions.append("a.date >= %s")
+        params.append(start_date)
+    if end_date:
+        where_conditions.append("a.date <= %s")
+        params.append(end_date)
     if student_id:
-        query['student_id'] = student_id
-    
-    # Section filter
+        where_conditions.append("a.student_id = %s")
+        params.append(student_id)
     if section:
-        query['section_id'] = section
-    
-    # Instructor filter
+        where_conditions.append("s.section = %s")
+        params.append(section)
     if instructor_id:
-        query['instructor_id'] = instructor_id
+        where_conditions.append("a.instructor_id = %s")
+        params.append(instructor_id)
     
-    print(f"📊 Admin fetching attendance with query: {query}")
+    where_clause = "WHERE " + " AND ".join(where_conditions) if where_conditions else ""
     
-    # Get attendance records
-    attendance_records = list(db.attendance.find(query).sort('timestamp', -1).limit(1000))
+    print(f"📊 Admin fetching attendance with filters: {dict(zip(['start_date', 'end_date', 'student_id', 'section', 'instructor_id'], [start_date, end_date, student_id, section, instructor_id]))}")
+    
+    # Get attendance records with joins
+    query = f"""
+        SELECT a.*, s.name as student_name, s.section, u.name as instructor_name
+        FROM attendance a
+        LEFT JOIN students s ON a.student_id = s.student_id
+        LEFT JOIN users u ON a.instructor_id = u.id
+        {where_clause}
+        ORDER BY a.timestamp DESC
+        LIMIT 1000
+    """
+    
+    attendance_records = db.execute_query(query, params)
     
     records = []
     for record in attendance_records:
-        # Get student info
-        student = db.students.find_one({'student_id': record['student_id']})
-        
-        # Get session info
-        session = db.sessions.find_one({'_id': ObjectId(record.get('session_id', ''))}) if record.get('session_id') else None
-        
-        # Get instructor info
-        instructor = db.users.find_one({'_id': ObjectId(record.get('instructor_id', ''))}) if record.get('instructor_id') else None
-        
         records.append({
-            'id': str(record['_id']),
+            'id': str(record['id']),
             'student_id': record['student_id'],
-            'student_name': student['name'] if student else 'Unknown',
-            'section': student.get('section', record.get('section_id', 'N/A')) if student else record.get('section_id', 'N/A'),
-            'instructor_name': instructor['name'] if instructor else 'Unknown',
+            'student_name': record.get('student_name', 'Unknown'),
+            'section': record.get('section', 'N/A'),
+            'instructor_name': record.get('instructor_name', 'Unknown'),
             'instructor_id': record.get('instructor_id', ''),
             'session_id': record.get('session_id', ''),
-            'session_name': session['name'] if session else 'Unknown',
-            'timestamp': record['timestamp'].isoformat(),
+            'session_name': 'Unknown',  # TODO: Add sessions table join
+            'timestamp': record['timestamp'].isoformat() if record.get('timestamp') else '',
             'date': record['date'],
-            'confidence': record.get('confidence', 0),
+            'confidence': float(record.get('confidence', 0)),
             'status': record.get('status', 'present')
         })
     
@@ -260,191 +310,22 @@ def get_all_attendance():
     return jsonify(records), 200
 
 
-@admin_bp.route('/attendance/export/csv', methods=['GET'])
-@jwt_required()
-@role_required('admin')
-def export_attendance_csv():
-    """Export all attendance records to CSV (admin only)"""
-    import csv
-    import io
-    from flask import send_file
-    
-    db = get_db()
-    
-    # Get same filters
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
-    student_id = request.args.get('student_id')
-    section = request.args.get('section')
-    instructor_id = request.args.get('instructor_id')
-    
-    # Build query (same as get_all_attendance)
-    query = {}
-    if start_date or end_date:
-        date_query = {}
-        if start_date:
-            date_query['$gte'] = start_date
-        if end_date:
-            date_query['$lte'] = end_date
-        if date_query:
-            query['date'] = date_query
-    if student_id:
-        query['student_id'] = student_id
-    if section:
-        query['section_id'] = section
-    if instructor_id:
-        query['instructor_id'] = instructor_id
-    
-    # Get records
-    records = list(db.attendance.find(query).sort('timestamp', -1))
-    
-    # Create CSV in memory
-    output = io.StringIO()
-    writer = csv.writer(output)
-    
-    # Write header
-    writer.writerow(['Date', 'Time', 'Student ID', 'Student Name', 'Section', 'Instructor', 'Session', 'Confidence', 'Status'])
-    
-    # Write data
-    for record in records:
-        student = db.students.find_one({'student_id': record['student_id']})
-        session = db.sessions.find_one({'_id': ObjectId(record.get('session_id', ''))}) if record.get('session_id') else None
-        instructor = db.users.find_one({'_id': ObjectId(record.get('instructor_id', ''))}) if record.get('instructor_id') else None
-        
-        writer.writerow([
-            record['date'],
-            record['timestamp'].strftime('%H:%M:%S'),
-            record['student_id'],
-            student['name'] if student else 'Unknown',
-            student.get('section', record.get('section_id', 'N/A')) if student else record.get('section_id', 'N/A'),
-            instructor['name'] if instructor else 'Unknown',
-            session['name'] if session else 'Unknown',
-            f"{record.get('confidence', 0):.2%}",
-            record.get('status', 'present')
-        ])
-    
-    # Create response
-    output.seek(0)
-    csv_data = output.getvalue()
-    csv_bytes = io.BytesIO(csv_data.encode('utf-8'))
-    csv_bytes.seek(0)
-    
-    filename = f'all_attendance_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-    
-    return send_file(
-        csv_bytes,
-        mimetype='text/csv',
-        as_attachment=True,
-        download_name=filename
-    )
+# TODO: Fix CSV export for MySQL
+# @admin_bp.route('/attendance/export/csv', methods=['GET'])
+# @jwt_required()
+# @role_required('admin')
+# def export_attendance_csv():
+#     """Export all attendance records to CSV (admin only)"""
+#     return jsonify({'error': 'CSV export temporarily disabled during MySQL migration'}), 501
 
 
-@admin_bp.route('/attendance/export/excel', methods=['GET'])
-@jwt_required()
-@role_required('admin')
-def export_attendance_excel():
-    """Export all attendance records to Excel (admin only)"""
-    try:
-        import openpyxl
-        from openpyxl.styles import Font, PatternFill
-        import io
-        from flask import send_file
-        
-        db = get_db()
-        
-        # Get same filters
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        student_id = request.args.get('student_id')
-        section = request.args.get('section')
-        instructor_id = request.args.get('instructor_id')
-        
-        # Build query
-        query = {}
-        if start_date or end_date:
-            date_query = {}
-            if start_date:
-                date_query['$gte'] = start_date
-            if end_date:
-                date_query['$lte'] = end_date
-            if date_query:
-                query['date'] = date_query
-        if student_id:
-            query['student_id'] = student_id
-        if section:
-            query['section_id'] = section
-        if instructor_id:
-            query['instructor_id'] = instructor_id
-        
-        # Get records
-        records = list(db.attendance.find(query).sort('timestamp', -1))
-        
-        # Create workbook
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "All Attendance Records"
-        
-        # Style header
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        header_font = Font(bold=True, color="FFFFFF")
-        
-        # Write header
-        headers = ['Date', 'Time', 'Student ID', 'Student Name', 'Section', 'Instructor', 'Session', 'Confidence', 'Status']
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col, value=header)
-            cell.fill = header_fill
-            cell.font = header_font
-        
-        # Write data
-        for row_idx, record in enumerate(records, 2):
-            student = db.students.find_one({'student_id': record['student_id']})
-            session = db.sessions.find_one({'_id': ObjectId(record.get('session_id', ''))}) if record.get('session_id') else None
-            instructor = db.users.find_one({'_id': ObjectId(record.get('instructor_id', ''))}) if record.get('instructor_id') else None
-            
-            ws.cell(row=row_idx, column=1, value=record['date'])
-            ws.cell(row=row_idx, column=2, value=record['timestamp'].strftime('%H:%M:%S'))
-            ws.cell(row=row_idx, column=3, value=record['student_id'])
-            ws.cell(row=row_idx, column=4, value=student['name'] if student else 'Unknown')
-            ws.cell(row=row_idx, column=5, value=student.get('section', record.get('section_id', 'N/A')) if student else record.get('section_id', 'N/A'))
-            ws.cell(row=row_idx, column=6, value=instructor['name'] if instructor else 'Unknown')
-            ws.cell(row=row_idx, column=7, value=session['name'] if session else 'Unknown')
-            ws.cell(row=row_idx, column=8, value=f"{record.get('confidence', 0):.2%}")
-            ws.cell(row=row_idx, column=9, value=record.get('status', 'present'))
-        
-        # Auto-adjust column widths
-        for column in ws.columns:
-            max_length = 0
-            column_letter = column[0].column_letter
-            for cell in column:
-                try:
-                    if len(str(cell.value)) > max_length:
-                        max_length = len(cell.value)
-                except:
-                    pass
-            adjusted_width = min(max_length + 2, 50)
-            ws.column_dimensions[column_letter].width = adjusted_width
-        
-        # Save to BytesIO
-        excel_bytes = io.BytesIO()
-        wb.save(excel_bytes)
-        excel_bytes.seek(0)
-        
-        filename = f'all_attendance_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
-        
-        return send_file(
-            excel_bytes,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True,
-            download_name=filename
-        )
-    
-    except ImportError:
-        return jsonify({'error': 'openpyxl not installed', 'message': 'Install with: pip install openpyxl'}), 500
-    except Exception as e:
-        print(f"❌ Error exporting Excel: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': 'Failed to export Excel', 'message': str(e)}), 500
+# TODO: Fix Excel export for MySQL
+# @admin_bp.route('/attendance/export/excel', methods=['GET'])
+# @jwt_required()
+# @role_required('admin')
+# def export_attendance_excel():
+#     """Export all attendance records to Excel (admin only)"""
+#     return jsonify({'error': 'Excel export temporarily disabled during MySQL migration'}), 501
 
 @admin_bp.route('/upload-model', methods=['POST'])
 @jwt_required()
@@ -485,9 +366,10 @@ def delete_instructor(instructor_id):
     db = get_db()
     
     try:
-        result = db.users.delete_one({'_id': ObjectId(instructor_id), 'role': 'instructor'})
+        result = db.execute_query("DELETE FROM users WHERE id = %s AND role = 'instructor'", 
+                                (instructor_id,), fetch=False)
         
-        if result.deleted_count == 0:
+        if db.cursor.rowcount == 0:
             return jsonify({'error': 'Instructor not found'}), 404
         
         print(f"✅ Instructor deleted: {instructor_id}")
@@ -505,20 +387,22 @@ def delete_student(student_id):
     db = get_db()
     
     try:
-        # Find student to get user_id
-        student = db.students.find_one({'_id': ObjectId(student_id)})
+        # Find student to get user_id and student_id
+        student = db.execute_query("SELECT user_id, student_id FROM students WHERE id = %s", (student_id,))
         
         if not student:
             return jsonify({'error': 'Student not found'}), 404
         
+        student = student[0]
+        
+        # Delete attendance records first (foreign key constraint)
+        db.execute_query("DELETE FROM attendance WHERE student_id = %s", (student['student_id'],), fetch=False)
+        
         # Delete student record
-        db.students.delete_one({'_id': ObjectId(student_id)})
+        db.execute_query("DELETE FROM students WHERE id = %s", (student_id,), fetch=False)
         
         # Delete user record
-        db.users.delete_one({'_id': ObjectId(student['user_id'])})
-        
-        # Delete attendance records
-        db.attendance.delete_many({'student_id': student['student_id']})
+        db.execute_query("DELETE FROM users WHERE id = %s", (student['user_id'],), fetch=False)
         
         print(f"✅ Student deleted: {student_id}")
         return jsonify({'message': 'Student deleted successfully'}), 200
@@ -553,31 +437,36 @@ def get_stats():
     print(f"📊 Getting stats for date: {target_date}")
     
     # Base stats (always total)
+    total_students = db.execute_query("SELECT COUNT(*) as count FROM students")[0]['count']
+    total_instructors = db.execute_query("SELECT COUNT(*) as count FROM users WHERE role = 'instructor'")[0]['count']
+    students_with_face = db.execute_query("SELECT COUNT(*) as count FROM students WHERE face_registered = 1")[0]['count']
+    
     stats = {
-        'total_students': db.students.count_documents({}),
-        'total_instructors': db.users.count_documents({'role': 'instructor'}),
-        'students_with_face': db.students.count_documents({'face_registered': True}),
+        'total_students': total_students,
+        'total_instructors': total_instructors,
+        'students_with_face': students_with_face,
         'selected_date': target_date
     }
     
     # Date-filtered stats
     if date_param:
         # Specific date - show all records for that day
-        stats['total_attendance_records'] = db.attendance.count_documents({'date': target_date})
-        stats['active_sessions'] = db.sessions.count_documents({
-            'status': 'active',
-            'start_time': {
-                '$gte': target_datetime,
-                '$lt': target_datetime + timedelta(days=1)
-            }
-        })
+        attendance_count = db.execute_query("SELECT COUNT(*) as count FROM attendance WHERE date = %s", (target_date,))[0]['count']
+        active_sessions = db.execute_query(
+            "SELECT COUNT(*) as count FROM sessions WHERE status = 'active' AND DATE(start_time) = %s", 
+            (target_date,)
+        )[0]['count']
+        stats['total_attendance_records'] = attendance_count
+        stats['active_sessions'] = active_sessions
     else:
         # Today - show last 12 hours
-        stats['total_attendance_records'] = db.attendance.count_documents({
-            'date': target_date,
-            'timestamp': {'$gte': twelve_hours_ago}
-        })
-        stats['active_sessions'] = db.sessions.count_documents({'status': 'active'})
+        attendance_count = db.execute_query(
+            "SELECT COUNT(*) as count FROM attendance WHERE date = %s AND timestamp >= %s", 
+            (target_date, twelve_hours_ago)
+        )[0]['count']
+        active_sessions = db.execute_query("SELECT COUNT(*) as count FROM sessions WHERE status = 'active'")[0]['count']
+        stats['total_attendance_records'] = attendance_count
+        stats['active_sessions'] = active_sessions
     
     print(f"✅ Stats: {stats}")
     return jsonify(stats), 200
@@ -590,7 +479,20 @@ def get_admin_settings():
     """Get admin settings"""
     db = get_db()
     
-    settings = db.admin_settings.find_one({})
+    # Check if admin_settings table exists, if not create it
+    try:
+        settings = db.execute_query("SELECT * FROM admin_settings LIMIT 1")
+    except:
+        # Create table if it doesn't exist
+        db.execute_query("""
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                face_recognition_threshold DECIMAL(3,2) DEFAULT 0.60,
+                session_timeout_minutes INT DEFAULT 120,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            )
+        """, fetch=False)
+        settings = []
     
     if not settings:
         # Return defaults
@@ -599,9 +501,10 @@ def get_admin_settings():
             'session_timeout_minutes': 120
         }), 200
     
+    settings = settings[0]
     return jsonify({
-        'face_recognition_threshold': settings.get('face_recognition_threshold', 0.60),
-        'session_timeout_minutes': settings.get('session_timeout_minutes', 120)
+        'face_recognition_threshold': float(settings.get('face_recognition_threshold', 0.60)),
+        'session_timeout_minutes': int(settings.get('session_timeout_minutes', 120))
     }), 200
 
 
@@ -614,19 +517,27 @@ def update_admin_settings():
         data = request.get_json()
         db = get_db()
         
-        settings_doc = {
-            'face_recognition_threshold': float(data.get('face_recognition_threshold', 0.60)),
-            'session_timeout_minutes': int(data.get('session_timeout_minutes', 120)),
-            'updated_at': datetime.utcnow()
-        }
+        face_threshold = float(data.get('face_recognition_threshold', 0.60))
+        timeout_minutes = int(data.get('session_timeout_minutes', 120))
         
-        db.admin_settings.update_one(
-            {},
-            {'$set': settings_doc},
-            upsert=True
-        )
+        # Check if settings exist
+        existing = db.execute_query("SELECT id FROM admin_settings LIMIT 1")
         
-        print(f"✅ Admin settings updated: {settings_doc}")
+        if existing:
+            # Update existing
+            db.execute_query("""
+                UPDATE admin_settings 
+                SET face_recognition_threshold = %s, session_timeout_minutes = %s, updated_at = %s
+                WHERE id = %s
+            """, (face_threshold, timeout_minutes, datetime.utcnow(), existing[0]['id']), fetch=False)
+        else:
+            # Insert new
+            db.execute_query("""
+                INSERT INTO admin_settings (face_recognition_threshold, session_timeout_minutes, updated_at)
+                VALUES (%s, %s, %s)
+            """, (face_threshold, timeout_minutes, datetime.utcnow()), fetch=False)
+        
+        print(f"✅ Admin settings updated: threshold={face_threshold}, timeout={timeout_minutes}")
         return jsonify({'message': 'Settings updated successfully'}), 200
     
     except Exception as e:
@@ -634,104 +545,22 @@ def update_admin_settings():
         return jsonify({'error': 'Failed to update settings', 'message': str(e)}), 500
 
 
-@admin_bp.route('/active-sessions', methods=['GET'])
-@jwt_required()
-@role_required('admin')
-def get_active_sessions():
-    """Get currently active sessions with filters"""
-    db = get_db()
-    
-    # Get query parameters for filtering
-    instructor_id = request.args.get('instructor_id')
-    course_name = request.args.get('course_name')
-    session_type = request.args.get('session_type')
-    time_block = request.args.get('time_block')
-    
-    # Build query
-    query = {'status': 'active'}
-    
-    if instructor_id:
-        query['instructor_id'] = instructor_id
-    if course_name:
-        query['course_name'] = course_name
-    if session_type and session_type in ['lab', 'theory']:
-        query['session_type'] = session_type
-    if time_block and time_block in ['morning', 'afternoon']:
-        query['time_block'] = time_block
-    
-    active_sessions = list(db.sessions.find(query).sort('start_time', -1))
-    
-    sessions = []
-    for session in active_sessions:
-        instructor = db.users.find_one({'_id': ObjectId(session.get('instructor_id', ''))}) if session.get('instructor_id') else None
-        
-        sessions.append({
-            'id': str(session['_id']),
-            'name': session['name'],
-            'instructor_name': instructor['name'] if instructor else 'Unknown',
-            'instructor_id': session.get('instructor_id', ''),
-            'course_name': session.get('course_name', ''),
-            'session_type': session.get('session_type', ''),
-            'section_id': session.get('section_id', ''),
-            'year': session.get('year', ''),
-            'time_block': session.get('time_block', ''),
-            'start_time': session['start_time'].isoformat(),
-            'attendance_count': session.get('attendance_count', 0),
-            'status': 'active'
-        })
-    
-    return jsonify(sessions), 200
+# TODO: Fix sessions for MySQL
+# @admin_bp.route('/active-sessions', methods=['GET'])
+# @jwt_required()
+# @role_required('admin')
+# def get_active_sessions():
+#     """Get currently active sessions with filters"""
+#     return jsonify([]), 200  # Return empty array for now
 
 
-@admin_bp.route('/recent-sessions', methods=['GET'])
-@jwt_required()
-@role_required('admin')
-def get_recent_sessions():
-    """Get recent completed sessions with filters"""
-    db = get_db()
-    
-    # Get query parameters for filtering
-    instructor_id = request.args.get('instructor_id')
-    course_name = request.args.get('course_name')
-    session_type = request.args.get('session_type')
-    time_block = request.args.get('time_block')
-    limit = int(request.args.get('limit', 50))
-    
-    # Build query
-    query = {'status': 'completed'}
-    
-    if instructor_id:
-        query['instructor_id'] = instructor_id
-    if course_name:
-        query['course_name'] = course_name
-    if session_type and session_type in ['lab', 'theory']:
-        query['session_type'] = session_type
-    if time_block and time_block in ['morning', 'afternoon']:
-        query['time_block'] = time_block
-    
-    recent_sessions = list(db.sessions.find(query).sort('start_time', -1).limit(limit))
-    
-    sessions = []
-    for session in recent_sessions:
-        instructor = db.users.find_one({'_id': ObjectId(session.get('instructor_id', ''))}) if session.get('instructor_id') else None
-        
-        sessions.append({
-            'id': str(session['_id']),
-            'name': session['name'],
-            'instructor_name': instructor['name'] if instructor else 'Unknown',
-            'instructor_id': session.get('instructor_id', ''),
-            'course_name': session.get('course_name', ''),
-            'session_type': session.get('session_type', ''),
-            'section_id': session.get('section_id', ''),
-            'year': session.get('year', ''),
-            'time_block': session.get('time_block', ''),
-            'start_time': session['start_time'].isoformat(),
-            'end_time': session['end_time'].isoformat() if session.get('end_time') else None,
-            'attendance_count': session.get('attendance_count', 0),
-            'status': 'completed'
-        })
-    
-    return jsonify(sessions), 200
+# TODO: Fix sessions for MySQL
+# @admin_bp.route('/recent-sessions', methods=['GET'])
+# @jwt_required()
+# @role_required('admin')
+# def get_recent_sessions():
+#     """Get recent completed sessions with filters"""
+#     return jsonify([]), 200  # Return empty array for now
 
 
 @admin_bp.route('/instructor/<instructor_id>/toggle', methods=['PUT'])
@@ -742,18 +571,16 @@ def toggle_instructor(instructor_id):
     try:
         db = get_db()
         
-        instructor = db.users.find_one({'_id': ObjectId(instructor_id), 'role': 'instructor'})
+        instructor = db.execute_query("SELECT enabled FROM users WHERE id = %s AND role = 'instructor'", (instructor_id,))
         
         if not instructor:
             return jsonify({'error': 'Instructor not found'}), 404
         
         # Toggle enabled status
-        new_status = not instructor.get('enabled', True)
+        current_status = bool(instructor[0].get('enabled', True))
+        new_status = not current_status
         
-        db.users.update_one(
-            {'_id': ObjectId(instructor_id)},
-            {'$set': {'enabled': new_status}}
-        )
+        db.execute_query("UPDATE users SET enabled = %s WHERE id = %s", (new_status, instructor_id), fetch=False)
         
         status_text = 'enabled' if new_status else 'disabled'
         print(f"✅ Instructor {instructor_id} {status_text}")
@@ -776,24 +603,25 @@ def toggle_student(student_id):
     try:
         db = get_db()
         
-        student = db.students.find_one({'_id': ObjectId(student_id)})
+        # Get student and user info
+        student_user = db.execute_query("""
+            SELECT s.id, s.user_id, u.enabled 
+            FROM students s 
+            JOIN users u ON s.user_id = u.id 
+            WHERE s.id = %s
+        """, (student_id,))
         
-        if not student:
+        if not student_user:
             return jsonify({'error': 'Student not found'}), 404
         
-        # Get user_id and toggle in users collection
-        user = db.users.find_one({'_id': ObjectId(student['user_id'])})
-        
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
+        student_user = student_user[0]
         
         # Toggle enabled status
-        new_status = not user.get('enabled', True)
+        current_status = bool(student_user.get('enabled', True))
+        new_status = not current_status
         
-        db.users.update_one(
-            {'_id': ObjectId(student['user_id'])},
-            {'$set': {'enabled': new_status}}
-        )
+        db.execute_query("UPDATE users SET enabled = %s WHERE id = %s", 
+                        (new_status, student_user['user_id']), fetch=False)
         
         status_text = 'enabled' if new_status else 'disabled'
         print(f"✅ Student {student_id} {status_text}")
@@ -812,37 +640,74 @@ def toggle_student(student_id):
 @jwt_required()
 @role_required('admin')
 def update_instructor(instructor_id):
-    """Update instructor details (admin only)"""
+    """Update instructor details (admin only) - supports multiple courses"""
     try:
+        import json
         data = request.get_json()
         db = get_db()
         
-        instructor = db.users.find_one({'_id': ObjectId(instructor_id), 'role': 'instructor'})
+        instructor = db.execute_query("SELECT id FROM users WHERE id = %s AND role = 'instructor'", (instructor_id,))
         
         if not instructor:
             return jsonify({'error': 'Instructor not found'}), 404
         
-        # Build update document
-        update_doc = {}
-        if 'name' in data:
-            update_doc['name'] = data['name']
-        if 'email' in data:
-            update_doc['email'] = data['email']
-        if 'department' in data:
-            update_doc['department'] = data['department']
+        # Build update fields
+        update_fields = []
+        update_values = []
         
-        if update_doc:
-            db.users.update_one(
-                {'_id': ObjectId(instructor_id)},
-                {'$set': update_doc}
-            )
+        if 'name' in data:
+            update_fields.append('name = %s')
+            update_values.append(data['name'])
+        if 'email' in data:
+            update_fields.append('email = %s')
+            update_values.append(data['email'])
+        if 'department' in data:
+            update_fields.append('department = %s')
+            update_values.append(data['department'])
+        if 'class_year' in data:
+            update_fields.append('class_year = %s')
+            update_values.append(str(data['class_year']))
+        
+        # Handle courses array (new format)
+        if 'courses' in data:
+            courses = data['courses']
+            if not courses or len(courses) == 0:
+                return jsonify({'error': 'At least one course is required'}), 400
+            
+            update_fields.append('courses = %s')
+            update_values.append(json.dumps(courses))
+            
+            # Update course_name for backward compatibility
+            update_fields.append('course_name = %s')
+            update_values.append(courses[0] if courses else '')
+        
+        # Handle session types
+        if 'lab_session' in data or 'theory_session' in data:
+            session_types = []
+            if data.get('lab_session', False):
+                session_types.append('lab')
+            if data.get('theory_session', False):
+                session_types.append('theory')
+            
+            if not session_types:
+                return jsonify({'error': 'At least one session type must be selected'}), 400
+            
+            update_fields.append('session_types = %s')
+            update_values.append(json.dumps(session_types))
+        
+        if update_fields:
+            update_values.append(instructor_id)
+            query = f"UPDATE users SET {', '.join(update_fields)} WHERE id = %s"
+            db.execute_query(query, update_values, fetch=False)
         
         print(f"✅ Instructor {instructor_id} updated")
         return jsonify({'message': 'Instructor updated successfully'}), 200
         
     except Exception as e:
         print(f"❌ Error updating instructor: {e}")
-        return jsonify({'error': 'Failed to update instructor'}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'Failed to update instructor', 'message': str(e)}), 500
 
 
 @admin_bp.route('/student/<student_id>', methods=['PUT'])
@@ -854,42 +719,53 @@ def update_student(student_id):
         data = request.get_json()
         db = get_db()
         
-        student = db.students.find_one({'_id': ObjectId(student_id)})
+        student = db.execute_query("SELECT user_id FROM students WHERE id = %s", (student_id,))
         
         if not student:
             return jsonify({'error': 'Student not found'}), 404
         
-        # Update student document
-        student_update = {}
-        if 'name' in data:
-            student_update['name'] = data['name']
-        if 'email' in data:
-            student_update['email'] = data['email']
-        if 'department' in data:
-            student_update['department'] = data['department']
-        if 'year' in data:
-            student_update['year'] = data['year']
-        if 'section' in data:
-            student_update['section'] = data['section']
+        user_id = student[0]['user_id']
         
-        if student_update:
-            db.students.update_one(
-                {'_id': ObjectId(student_id)},
-                {'$set': student_update}
-            )
+        # Update student document
+        student_fields = []
+        student_values = []
+        
+        if 'name' in data:
+            student_fields.append('name = %s')
+            student_values.append(data['name'])
+        if 'email' in data:
+            student_fields.append('email = %s')
+            student_values.append(data['email'])
+        if 'department' in data:
+            student_fields.append('department = %s')
+            student_values.append(data['department'])
+        if 'year' in data:
+            student_fields.append('year = %s')
+            student_values.append(data['year'])
+        if 'section' in data:
+            student_fields.append('section = %s')
+            student_values.append(data['section'])
+        
+        if student_fields:
+            student_values.append(student_id)
+            query = f"UPDATE students SET {', '.join(student_fields)} WHERE id = %s"
+            db.execute_query(query, student_values, fetch=False)
         
         # Update user document
-        user_update = {}
-        if 'name' in data:
-            user_update['name'] = data['name']
-        if 'email' in data:
-            user_update['email'] = data['email']
+        user_fields = []
+        user_values = []
         
-        if user_update:
-            db.users.update_one(
-                {'_id': ObjectId(student['user_id'])},
-                {'$set': user_update}
-            )
+        if 'name' in data:
+            user_fields.append('name = %s')
+            user_values.append(data['name'])
+        if 'email' in data:
+            user_fields.append('email = %s')
+            user_values.append(data['email'])
+        
+        if user_fields:
+            user_values.append(user_id)
+            query = f"UPDATE users SET {', '.join(user_fields)} WHERE id = %s"
+            db.execute_query(query, user_values, fetch=False)
         
         print(f"✅ Student {student_id} updated")
         return jsonify({'message': 'Student updated successfully'}), 200

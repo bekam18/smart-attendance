@@ -2,6 +2,7 @@
   "embedding_model": "InceptionResnetV1",
   "pretrained_on": "vggface2",
   "embedding_dim": 512,
+  "normalize_embeddings": true,
   "num_classes": 19,
   "classes": [
     "STU001",
@@ -22,13 +23,21 @@
     "STU017",
     "STU018",
     "STU019",
-    "STU020"
+    "STU021"
   ],
-  "threshold": 0.9703035249821427,
+  "threshold": 0.9117692773027665,
   "classifier_type": "SVC",
+  "kernel": "linear",
   "accuracy": 1.0,
-  "training_date": "2025-12-01T09:47:43.312736",
-  "python_version": "3.10.11 (tags/v3.10.11:7d4cc5a, Apr  5 2023, 00:38:17) [MSC v.1929 64 bit (AMD64)]",
-  "torch_version": "2.9.1+cpu",
-  "num_training_samples": 3442
+  "training_date": "2025-12-02T22:54:11.066769",
+  "python_version": "3.9.6 (tags/v3.9.6:db3ff76, Jun 28 2021, 15:26:21) [MSC v.1929 64 bit (AMD64)]",
+  "torch_version": "2.1.2+cpu",
+  "num_training_samples": 3442,
+  "preprocessing_pipeline": [
+    "1. MTCNN face detection (160x160, margin=20)",
+    "2. FaceNet embedding extraction (512-dim)",
+    "3. L2 normalization (unit length)",
+    "4. StandardScaler normalization",
+    "5. SVM classification"
+  ]
 }

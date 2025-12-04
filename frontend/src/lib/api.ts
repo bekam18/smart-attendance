@@ -173,6 +173,9 @@ export const attendanceAPI = {
   endSession: (sessionId: string) =>
     api.post('/api/attendance/end-session', { session_id: sessionId }),
   
+  markAbsent: (sessionId: string) =>
+    api.post('/api/attendance/mark-absent', { session_id: sessionId }),
+  
   recognize: async (image: Blob | string, sessionId: string) => {
     console.log('🔍 Sending recognition request...');
     console.log('Session ID:', sessionId);

@@ -1,11 +1,10 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from bson import ObjectId
 from datetime import datetime
 import os
 import uuid
 
-from db.mongo import get_db
+from db.mysql import get_db
 from utils.security import role_required
 from config import config
 
@@ -19,7 +18,8 @@ def get_profile():
     user_id = get_jwt_identity()
     db = get_db()
     
-    student = db.students.find_one({'user_id': user_id})
+    student_result = db.execute_query('SELECT * FROM students WHERE user_id = %s', (user_id,))
+    student = student_result[0] if student_result else None
     
     if not student:
         return jsonify({'error': 'Student profile not found'}), 404
@@ -44,7 +44,8 @@ def register_face():
     user_id = get_jwt_identity()
     db = get_db()
     
-    student = db.students.find_one({'user_id': user_id})
+    student_result = db.execute_query('SELECT * FROM students WHERE user_id = %s', (user_id,))
+    student = student_result[0] if student_result else None
     
     if not student:
         return jsonify({'error': 'Student profile not found'}), 404
@@ -98,20 +99,20 @@ def get_attendance():
     user_id = get_jwt_identity()
     db = get_db()
     
-    student = db.students.find_one({'user_id': user_id})
+    student_result = db.execute_query('SELECT * FROM students WHERE user_id = %s', (user_id,))
+    student = student_result[0] if student_result else None
     
     if not student:
         return jsonify({'error': 'Student profile not found'}), 404
     
     # Get attendance records
-    attendance_records = db.attendance.find(
-        {'student_id': student['student_id']}
-    ).sort('timestamp', -1)
+    attendance_records = db.execute_query('SELECT * FROM attendance WHERE student_id = %s ORDER BY timestamp DESC', (student['student_id'],))
     
     records = []
     for record in attendance_records:
         # Get session info
-        session = db.sessions.find_one({'_id': ObjectId(record.get('session_id', ''))}) if record.get('session_id') else None
+        session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (record.get('session_id'),)) if record.get('session_id') else []
+        session = session_result[0] if session_result else None
         
         records.append({
             'id': str(record['_id']),

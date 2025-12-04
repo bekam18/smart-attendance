@@ -2,8 +2,10 @@
 Verify student database after update
 """
 
-from pymongo import MongoClient
+
 from config import config
+from db.mysql import get_db
+from db.mysql import get_db
 
 def verify_students():
     """Verify student database"""
@@ -12,22 +14,22 @@ def verify_students():
     print("VERIFYING STUDENT DATABASE")
     print("="*60)
     
-    client = MongoClient(config.MONGODB_URI)
-    db = client[config.MONGODB_DB_NAME]
+    
+    db = get_db()
     
     # Check counts
     print("\n📊 Database Counts:")
-    print(f"   Total Users: {db.users.count_documents({})}")
-    print(f"   - Admins: {db.users.count_documents({'role': 'admin'})}")
-    print(f"   - Instructors: {db.users.count_documents({'role': 'instructor'})}")
-    print(f"   - Students: {db.users.count_documents({'role': 'student'})}")
-    print(f"   Student Records: {db.students.count_documents({})}")
+    print(f"   Total Users: {db.execute_query('SELECT COUNT(*) as count FROM users')[0]['count']}")
+    print(f"   - Admins: {db.execute_query('SELECT COUNT(*) as count FROM users WHERE role = "admin"')[0]['count']}")
+    print(f"   - Instructors: {db.execute_query('SELECT COUNT(*) as count FROM users WHERE role = "instructor"')[0]['count']}")
+    print(f"   - Students: {db.execute_query('SELECT COUNT(*) as count FROM users WHERE role = "student"')[0]['count']}")
+    print(f"   Student Records: {db.execute_query('SELECT COUNT(*) as count FROM students')[0]['count']}")
     
     # Check sections
     print("\n📚 Section Breakdown:")
-    section_a = db.students.count_documents({'section': 'A'})
-    section_b = db.students.count_documents({'section': 'B'})
-    section_c = db.students.count_documents({'section': 'C'})
+    section_a = db.execute_query('SELECT COUNT(*) as count FROM students WHERE section = "A"')[0]['count']
+    section_b = db.execute_query('SELECT COUNT(*) as count FROM students WHERE section = "B"')[0]['count']
+    section_c = db.execute_query('SELECT COUNT(*) as count FROM students WHERE section = "C"')[0]['count']
     
     print(f"   Section A: {section_a} students")
     print(f"   Section B: {section_b} students")
@@ -37,7 +39,7 @@ def verify_students():
     print("\n👥 All Students:")
     print("-" * 60)
     
-    students = list(db.students.find({}).sort('student_id', 1))
+    students = db.execute_query('SELECT * FROM students ORDER BY student_id')
     
     current_section = None
     for student in students:
@@ -81,9 +83,9 @@ def verify_students():
     mismatch_count = 0
     
     for student in students:
-        from bson import ObjectId
+        
         try:
-            user = db.users.find_one({'_id': ObjectId(student['user_id'])})
+            user = db.execute_query('SELECT * FROM users WHERE id = %s', (student['user_id'],))
             if not user:
                 print(f"   ❌ Missing user account for {student['student_id']}")
                 missing_count += 1

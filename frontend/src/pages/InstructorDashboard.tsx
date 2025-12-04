@@ -9,13 +9,13 @@ import { Session } from '../types';
 export default function InstructorDashboard() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [showCreateSession, setShowCreateSession] = useState(false);
-  const [sessionName, setSessionName] = useState('');
   const [courseName, setCourseName] = useState('');
   const [sessionType, setSessionType] = useState<'lab' | 'theory' | ''>('');
   const [timeBlock, setTimeBlock] = useState<'morning' | 'afternoon' | ''>('');
   const [section, setSection] = useState('');
-  const [year, setYear] = useState('');
   const [instructorInfo, setInstructorInfo] = useState<any>(null);
+  const [showCustomCourse, setShowCustomCourse] = useState(false);
+  const [customCourse, setCustomCourse] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -59,19 +59,19 @@ export default function InstructorDashboard() {
       return;
     }
     
-    if (!year) {
-      toast.error('Please enter a year');
+    if (!instructorInfo?.class_year) {
+      toast.error('Your year is not set. Please contact admin.');
       return;
     }
     
     try {
       const response = await attendanceAPI.startSession({
-        name: sessionName,
+        name: `${sessionType} - ${timeBlock}`,  // Auto-generate session name
         course: courseName,
         session_type: sessionType,
         time_block: timeBlock,
         section_id: section,
-        year: year
+        year: instructorInfo.class_year  // Use instructor's year from profile
       });
       
       toast.success('Session created successfully');
@@ -126,11 +126,35 @@ export default function InstructorDashboard() {
         {instructorInfo && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <div className="flex items-center justify-between">
-              <div>
+              <div className="flex-1">
                 <h3 className="font-semibold text-blue-900">{instructorInfo.name}</h3>
-                <p className="text-sm text-blue-700">
-                  {instructorInfo.course_name} - {instructorInfo.class_year}
+                <p className="text-sm text-blue-700 mt-1">
+                  Class Year: {instructorInfo.class_year}
                 </p>
+                
+                {/* Display all courses */}
+                {instructorInfo.courses && instructorInfo.courses.length > 0 ? (
+                  <div className="mt-2">
+                    <span className="text-sm font-medium text-blue-700">Courses:</span>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                      {instructorInfo.courses.map((course: string, index: number) => (
+                        <span
+                          key={index}
+                          className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-200 text-blue-900"
+                        >
+                          {course}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : instructorInfo.course_name ? (
+                  <div className="mt-2">
+                    <span className="text-sm font-medium text-blue-700">Course:</span>
+                    <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-200 text-blue-900 ml-2">
+                      {instructorInfo.course_name}
+                    </span>
+                  </div>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 {instructorInfo.session_types?.map((type: string) => (
@@ -224,58 +248,74 @@ export default function InstructorDashboard() {
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Session Name
+                  Section <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="text"
-                  value={sessionName}
-                  onChange={(e) => setSessionName(e.target.value)}
+                <select
+                  value={section}
+                  onChange={(e) => setSection(e.target.value)}
                   className="w-full px-4 py-2 border rounded-lg"
-                  placeholder="e.g., Data Structures Lecture"
                   required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Section <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={section}
-                    onChange={(e) => setSection(e.target.value)}
-                    className="w-full px-4 py-2 border rounded-lg"
-                    placeholder="e.g., A"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Year <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={year}
-                    onChange={(e) => setYear(e.target.value)}
-                    className="w-full px-4 py-2 border rounded-lg"
-                    placeholder="e.g., 2nd Year"
-                    required
-                  />
-                </div>
+                >
+                  <option value="">Select Section...</option>
+                  <option value="A">Section A</option>
+                  <option value="B">Section B</option>
+                  <option value="C">Section C</option>
+                  <option value="D">Section D</option>
+                </select>
               </div>
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Course (Optional)
                 </label>
-                <input
-                  type="text"
-                  value={courseName}
-                  onChange={(e) => setCourseName(e.target.value)}
-                  className="w-full px-4 py-2 border rounded-lg"
-                  placeholder="e.g., Computer Science"
-                />
+                {!showCustomCourse ? (
+                  <select
+                    value={courseName}
+                    onChange={(e) => {
+                      if (e.target.value === 'custom') {
+                        setShowCustomCourse(true);
+                        setCourseName('');
+                      } else {
+                        setCourseName(e.target.value);
+                      }
+                    }}
+                    className="w-full px-4 py-2 border rounded-lg"
+                  >
+                    <option value="">Select Course (Optional)</option>
+                    {instructorInfo?.courses && instructorInfo.courses.length > 0 ? (
+                      instructorInfo.courses.map((course: string, index: number) => (
+                        <option key={index} value={course}>{course}</option>
+                      ))
+                    ) : instructorInfo?.course_name ? (
+                      <option value={instructorInfo.course_name}>{instructorInfo.course_name}</option>
+                    ) : null}
+                    <option value="custom">Custom Course...</option>
+                  </select>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Enter custom course"
+                      value={customCourse}
+                      onChange={(e) => {
+                        setCustomCourse(e.target.value);
+                        setCourseName(e.target.value);
+                      }}
+                      className="flex-1 px-4 py-2 border rounded-lg"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCustomCourse(false);
+                        setCustomCourse('');
+                        setCourseName('');
+                      }}
+                      className="px-3 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
+                    >
+                      Back
+                    </button>
+                  </div>
+                )}
               </div>
               
               <div className="flex space-x-2">
@@ -287,7 +327,15 @@ export default function InstructorDashboard() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowCreateSession(false)}
+                  onClick={() => {
+                    setShowCreateSession(false);
+                    setCourseName('');
+                    setSessionType('');
+                    setTimeBlock('');
+                    setSection('');
+                    setShowCustomCourse(false);
+                    setCustomCourse('');
+                  }}
                   className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
                 >
                   Cancel

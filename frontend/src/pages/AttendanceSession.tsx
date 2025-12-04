@@ -46,6 +46,8 @@ export default function AttendanceSession() {
         loadSessionData(); // Refresh attendance list
       } else if (result.status === 'already_marked') {
         toast(`ℹ️ ${result.message}`, { icon: '🔵' });
+      } else if (result.status === 'wrong_section') {
+        toast.error(`❌ ${result.message}`);
       } else if (result.status === 'unknown') {
         toast.error('❌ Unknown student');
       } else if (result.status === 'no_face') {
@@ -61,6 +63,19 @@ export default function AttendanceSession() {
       console.error(error);
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleStopCamera = async () => {
+    if (!sessionId) return;
+    
+    try {
+      const response = await attendanceAPI.markAbsent(sessionId);
+      const data = response.data;
+      toast.success(`✓ Camera stopped. Marked ${data.absent_count} students as absent`);
+      loadSessionData(); // Refresh attendance list to show absent students
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Failed to mark absent students');
     }
   };
 
@@ -98,12 +113,20 @@ export default function AttendanceSession() {
           </button>
           
           {session.status === 'active' && (
-            <button
-              onClick={handleEndSession}
-              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
-            >
-              End Session
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleStopCamera}
+                className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+              >
+                Stop Camera
+              </button>
+              <button
+                onClick={handleEndSession}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+              >
+                End Session
+              </button>
+            </div>
           )}
         </div>
 
@@ -121,7 +144,10 @@ export default function AttendanceSession() {
             </span>
             <div className="flex items-center space-x-1">
               <Users className="w-4 h-4" />
-              <span>{attendance.length} students present</span>
+              <span>
+                {attendance.filter(a => a.status === 'present').length} present, {' '}
+                {attendance.filter(a => a.status === 'absent').length} absent
+              </span>
             </div>
           </div>
         </div>
@@ -148,12 +174,14 @@ export default function AttendanceSession() {
                 <div className={`mt-4 p-4 rounded-lg ${
                   lastResult.status === 'recognized' ? 'bg-green-50 border border-green-200' :
                   lastResult.status === 'already_marked' ? 'bg-blue-50 border border-blue-200' :
+                  lastResult.status === 'wrong_section' ? 'bg-orange-50 border border-orange-200' :
                   lastResult.status === 'unknown' ? 'bg-red-50 border border-red-200' :
                   'bg-yellow-50 border border-yellow-200'
                 }`}>
                   <div className="flex items-center space-x-2">
                     {lastResult.status === 'recognized' && <CheckCircle className="w-5 h-5 text-green-600" />}
                     {lastResult.status === 'already_marked' && <AlertCircle className="w-5 h-5 text-blue-600" />}
+                    {lastResult.status === 'wrong_section' && <XCircle className="w-5 h-5 text-orange-600" />}
                     {lastResult.status === 'unknown' && <XCircle className="w-5 h-5 text-red-600" />}
                     {lastResult.status === 'no_face' && <AlertCircle className="w-5 h-5 text-yellow-600" />}
                     
@@ -176,7 +204,19 @@ export default function AttendanceSession() {
 
           {/* Attendance List */}
           <div className="bg-white p-6 rounded-lg shadow">
-            <h3 className="text-lg font-semibold mb-4">Attendance List</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Attendance List</h3>
+              {attendance.length > 0 && (
+                <div className="flex gap-4 text-sm">
+                  <span className="text-green-600 font-medium">
+                    ✓ {attendance.filter(a => a.status === 'present').length} Present
+                  </span>
+                  <span className="text-red-600 font-medium">
+                    ✗ {attendance.filter(a => a.status === 'absent').length} Absent
+                  </span>
+                </div>
+              )}
+            </div>
             
             {attendance.length === 0 ? (
               <div className="text-center py-8 text-gray-500">
@@ -185,18 +225,36 @@ export default function AttendanceSession() {
             ) : (
               <div className="space-y-2 max-h-[600px] overflow-y-auto">
                 {attendance.map((record, index) => (
-                  <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <p className="font-medium">{record.student_name}</p>
-                      <p className="text-sm text-gray-600">{record.student_id}</p>
+                  <div key={index} className={`flex items-center justify-between p-3 rounded-lg ${
+                    record.status === 'absent' ? 'bg-red-50 border border-red-200' : 'bg-gray-50'
+                  }`}>
+                    <div className="flex items-center gap-3">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        record.status === 'absent' 
+                          ? 'bg-red-100 text-red-800' 
+                          : 'bg-green-100 text-green-800'
+                      }`}>
+                        {record.status === 'absent' ? '🔴 Absent' : '🟢 Present'}
+                      </span>
+                      <div>
+                        <p className="font-medium">{record.student_name}</p>
+                        <p className="text-sm text-gray-600">{record.student_id}</p>
+                      </div>
                     </div>
                     <div className="text-right">
-                      <p className="text-sm text-gray-600">
-                        {new Date(record.timestamp).toLocaleTimeString()}
-                      </p>
-                      <p className="text-xs text-gray-500">
-                        {(record.confidence * 100).toFixed(1)}%
-                      </p>
+                      {record.status === 'present' && (
+                        <>
+                          <p className="text-sm text-gray-600">
+                            {new Date(record.timestamp).toLocaleTimeString()}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            {(record.confidence * 100).toFixed(1)}%
+                          </p>
+                        </>
+                      )}
+                      {record.status === 'absent' && (
+                        <p className="text-sm text-red-600">Not present</p>
+                      )}
                     </div>
                   </div>
                 ))}

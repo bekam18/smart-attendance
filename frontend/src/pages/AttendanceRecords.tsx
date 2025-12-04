@@ -32,7 +32,8 @@ export default function AttendanceRecords() {
     start_date: '',
     end_date: '',
     student_id: '',
-    session_id: ''
+    session_id: '',
+    section_id: ''
   });
   
   const [searchTerm, setSearchTerm] = useState('');
@@ -71,6 +72,7 @@ export default function AttendanceRecords() {
       if (filters.end_date) activeFilters.end_date = filters.end_date;
       if (filters.student_id) activeFilters.student_id = filters.student_id;
       if (filters.session_id) activeFilters.session_id = filters.session_id;
+      if (filters.section_id) activeFilters.section_id = filters.section_id;
       
       const response = await instructorAPI.getRecords(activeFilters);
       setRecords(response.data);
@@ -87,7 +89,8 @@ export default function AttendanceRecords() {
       start_date: '',
       end_date: '',
       student_id: '',
-      session_id: ''
+      session_id: '',
+      section_id: ''
     });
     setSearchTerm('');
     loadInitialData();
@@ -100,6 +103,7 @@ export default function AttendanceRecords() {
       if (filters.end_date) activeFilters.end_date = filters.end_date;
       if (filters.student_id) activeFilters.student_id = filters.student_id;
       if (filters.session_id) activeFilters.session_id = filters.session_id;
+      if (filters.section_id) activeFilters.section_id = filters.section_id;
       
       await instructorAPI.exportCSV(activeFilters);
       toast.success('CSV downloaded successfully!');
@@ -116,6 +120,7 @@ export default function AttendanceRecords() {
       if (filters.end_date) activeFilters.end_date = filters.end_date;
       if (filters.student_id) activeFilters.student_id = filters.student_id;
       if (filters.session_id) activeFilters.session_id = filters.session_id;
+      if (filters.section_id) activeFilters.section_id = filters.section_id;
       
       await instructorAPI.exportExcel(activeFilters);
       toast.success('Excel downloaded successfully!');
@@ -201,6 +206,21 @@ export default function AttendanceRecords() {
                     {student.name} ({student.student_id})
                   </option>
                 ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium mb-2">Section</label>
+              <select
+                value={filters.section_id}
+                onChange={(e) => setFilters({...filters, section_id: e.target.value})}
+                className="w-full px-4 py-2 border rounded-lg"
+              >
+                <option value="">All Sections</option>
+                <option value="A">Section A</option>
+                <option value="B">Section B</option>
+                <option value="C">Section C</option>
+                <option value="D">Section D</option>
               </select>
             </div>
             

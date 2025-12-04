@@ -20,9 +20,9 @@ When you end a session, students who didn't appear on camera are automatically m
 - Marks them as PRESENT automatically
 ```
 
-### Step 3: End Session
+### Step 3: Stop Camera
 ```
-1. Click "End Session"
+1. Click "Stop Camera" button
 2. System automatically:
    ✓ Finds all students in your section
    ✓ Checks who was marked present
@@ -44,7 +44,7 @@ When you end a session, students who didn't appear on camera are automatically m
 **During session:**
 - 3 students appear on camera → Marked PRESENT
 
-**When you end session:**
+**When you click "Stop Camera":**
 - 7 students didn't appear → Automatically marked ABSENT
 
 **Result:**

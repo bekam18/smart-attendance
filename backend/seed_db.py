@@ -3,38 +3,42 @@ Database seeding script for SmartAttendance
 Creates demo users for testing
 """
 
-from pymongo import MongoClient
 from datetime import datetime
 from utils.security import hash_password
 from config import config
+from db.mysql import get_db
+import json
 
 def seed_database():
     """Seed the database with demo users"""
     
     print("🌱 Seeding database...")
     
-    # Connect to MongoDB
-    client = MongoClient(config.MONGODB_URI)
-    db = client[config.MONGODB_DB_NAME]
+    # Connect to MySQL
+    db = get_db()
     
     # Clear existing data (optional - comment out if you want to keep existing data)
     print("Clearing existing data...")
-    db.users.delete_many({})
-    db.students.delete_many({})
-    db.attendance.delete_many({})
-    db.sessions.delete_many({})
+    db.execute_query("DELETE FROM attendance", fetch=False)
+    db.execute_query("DELETE FROM sessions", fetch=False)
+    db.execute_query("DELETE FROM students", fetch=False)
+    db.execute_query("DELETE FROM users", fetch=False)
     
     # Create Admin User
     print("Creating admin user...")
-    admin_user = {
-        'username': 'admin',
-        'password': hash_password('admin123'),
-        'email': 'admin@smartattendance.com',
-        'name': 'System Administrator',
-        'role': 'admin',
-        'created_at': datetime.utcnow()
-    }
-    admin_result = db.users.insert_one(admin_user)
+    admin_query = """
+        INSERT INTO users (username, password, email, name, role, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    admin_values = (
+        'admin',
+        hash_password('admin123'),
+        'admin@smartattendance.com',
+        'System Administrator',
+        'admin',
+        datetime.utcnow()
+    )
+    db.execute_query(admin_query, admin_values, fetch=False)
     print(f"✅ Admin created: admin / admin123")
     
     # Create Instructor Users
@@ -47,8 +51,10 @@ def seed_database():
             'name': 'Dr. John Smith',
             'role': 'instructor',
             'department': 'Computer Science',
-            'sections': ['CS101-A', 'CS201-B'],  # Sections this instructor teaches
-            'created_at': datetime.utcnow()
+            'course_name': 'Computer Science',
+            'class_year': '2nd Year',
+            'session_types': ['lab', 'theory'],
+            'sections': ['A', 'B']
         },
         {
             'username': 'instructor2',
@@ -57,13 +63,33 @@ def seed_database():
             'name': 'Prof. Jane Doe',
             'role': 'instructor',
             'department': 'Mathematics',
-            'sections': ['MATH101-A', 'MATH201-C'],  # Different sections
-            'created_at': datetime.utcnow()
+            'course_name': 'Mathematics',
+            'class_year': '3rd Year',
+            'session_types': ['theory'],
+            'sections': ['A', 'C']
         }
     ]
     
+    instructor_query = """
+        INSERT INTO users (username, password, email, name, role, department, course_name, class_year, session_types, sections, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    
     for instructor in instructors:
-        db.users.insert_one(instructor)
+        instructor_values = (
+            instructor['username'],
+            instructor['password'],
+            instructor['email'],
+            instructor['name'],
+            instructor['role'],
+            instructor['department'],
+            instructor['course_name'],
+            instructor['class_year'],
+            json.dumps(instructor['session_types']),
+            json.dumps(instructor['sections']),
+            datetime.utcnow()
+        )
+        db.execute_query(instructor_query, instructor_values, fetch=False)
         print(f"✅ Instructor created: {instructor['username']} / inst123 (Sections: {', '.join(instructor['sections'])})")
     
     # Create Student Users
@@ -116,31 +142,40 @@ def seed_database():
         }
     ]
     
+    user_query = """
+        INSERT INTO users (username, password, email, name, role, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    
+    student_query = """
+        INSERT INTO students (user_id, student_id, name, email, department, year, face_registered, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    
     for student_data in students_data:
         # Create user
-        user_doc = {
-            'username': student_data['username'],
-            'password': student_data['password'],
-            'email': student_data['email'],
-            'name': student_data['name'],
-            'role': 'student',
-            'created_at': datetime.utcnow()
-        }
-        user_result = db.users.insert_one(user_doc)
-        user_id = str(user_result.inserted_id)
+        user_values = (
+            student_data['username'],
+            student_data['password'],
+            student_data['email'],
+            student_data['name'],
+            'student',
+            datetime.utcnow()
+        )
+        user_id = db.execute_query(user_query, user_values, fetch=False)
         
         # Create student profile
-        student_doc = {
-            'user_id': user_id,
-            'student_id': student_data['student_id'],
-            'name': student_data['name'],
-            'email': student_data['email'],
-            'department': student_data['department'],
-            'year': student_data['year'],
-            'face_registered': False,
-            'created_at': datetime.utcnow()
-        }
-        db.students.insert_one(student_doc)
+        student_values = (
+            user_id,
+            student_data['student_id'],
+            student_data['name'],
+            student_data['email'],
+            student_data['department'],
+            student_data['year'],
+            False,
+            datetime.utcnow()
+        )
+        db.execute_query(student_query, student_values, fetch=False)
         
         print(f"✅ Student created: {student_data['username']} / stud123 ({student_data['student_id']})")
     
@@ -160,12 +195,15 @@ def seed_database():
     
     # Print statistics
     print("\n📊 Database Statistics:")
-    print(f"  Total Users: {db.users.count_documents({})}")
-    print(f"  Admins: {db.users.count_documents({'role': 'admin'})}")
-    print(f"  Instructors: {db.users.count_documents({'role': 'instructor'})}")
-    print(f"  Students: {db.students.count_documents({})}")
+    total_users = db.execute_query("SELECT COUNT(*) as count FROM users")[0]['count']
+    total_admins = db.execute_query("SELECT COUNT(*) as count FROM users WHERE role = 'admin'")[0]['count']
+    total_instructors = db.execute_query("SELECT COUNT(*) as count FROM users WHERE role = 'instructor'")[0]['count']
+    total_students = db.execute_query("SELECT COUNT(*) as count FROM students")[0]['count']
     
-    client.close()
+    print(f"  Total Users: {total_users}")
+    print(f"  Admins: {total_admins}")
+    print(f"  Instructors: {total_instructors}")
+    print(f"  Students: {total_students}")
 
 if __name__ == '__main__':
     seed_database()

@@ -2,7 +2,7 @@
 Add all students from training dataset to MongoDB
 """
 
-from db.mongo import get_db
+from db.mongo import get_db, init_db
 from utils.security import hash_password
 from pathlib import Path
 
@@ -26,6 +26,10 @@ def add_all_students():
     
     print("\n🔍 Connecting to database...")
     db = get_db()
+    # If script is run standalone, ensure DB connection is initialized
+    if db is None:
+        print("⚙️  No DB connection found, initializing MongoDB connection...")
+        db = init_db()
     
     print("📝 Adding students to database...\n")
     
