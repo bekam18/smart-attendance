@@ -544,6 +544,43 @@ def get_instructor_info():
         return jsonify({'error': 'Failed to fetch instructor info', 'message': str(e)}), 500
 
 
+@instructor_bp.route('/sections-by-course', methods=['GET'])
+@jwt_required()
+@role_required('instructor', 'admin')
+def get_sections_by_course():
+    """Get instructor's sections (simplified - returns all instructor sections)"""
+    try:
+        user_id = get_jwt_identity()
+        db = get_db()
+        
+        course_name = request.args.get('course_name')
+        if not course_name:
+            return jsonify({'error': 'course_name parameter is required'}), 400
+        
+        # Get instructor's assigned sections
+        user_result = db.execute_query('SELECT sections FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'Instructor not found'}), 404
+        
+        import json
+        instructor_sections = []
+        if user_result[0].get('sections'):
+            try:
+                instructor_sections = json.loads(user_result[0]['sections'])
+            except (json.JSONDecodeError, TypeError):
+                instructor_sections = []
+        
+        # Return all instructor sections
+        # (In a real system, you might filter by which sections have students in this course)
+        logger.info(f"Returning sections for instructor {user_id}, course {course_name}: {instructor_sections}")
+        
+        return jsonify({'sections': instructor_sections}), 200
+    
+    except Exception as e:
+        logger.error(f"Error fetching sections by course: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to fetch sections', 'message': str(e)}), 500
+
+
 @instructor_bp.route('/students', methods=['GET'])
 @jwt_required()
 @role_required('instructor', 'admin')
@@ -587,3 +624,593 @@ def get_students_list():
     except Exception as e:
         logger.error(f"Error fetching students: {e}", exc_info=True)
         return jsonify({'error': 'Failed to fetch students', 'message': str(e)}), 500
+
+
+@instructor_bp.route('/reports/generate', methods=['POST'])
+@jwt_required()
+@role_required('instructor', 'admin')
+def generate_report():
+    """Generate comprehensive attendance report with statistics"""
+    try:
+        user_id = get_jwt_identity()
+        db = get_db()
+        data = request.get_json()
+        
+        # Get user info
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'User not found'}), 404
+        user = user_result[0]
+        
+        # Extract filters
+        report_type = data.get('report_type')  # daily, weekly, monthly, semester, yearly
+        section_id = data.get('section_id')
+        course_name = data.get('course_name')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        
+        # Build query for attendance records
+        sql = 'SELECT * FROM attendance WHERE 1=1'
+        params = []
+        
+        # Filter by instructor for non-admins
+        if user['role'] == 'instructor':
+            sql += ' AND instructor_id = %s'
+            params.append(user_id)
+        
+        # Apply filters
+        if section_id:
+            sql += ' AND section_id = %s'
+            params.append(section_id)
+        
+        if course_name:
+            sql += ' AND course_name = %s'
+            params.append(course_name)
+        
+        if start_date:
+            sql += ' AND date >= %s'
+            params.append(start_date)
+        
+        if end_date:
+            sql += ' AND date <= %s'
+            params.append(end_date)
+        
+        sql += ' ORDER BY date, timestamp'
+        
+        # Get attendance records
+        records = db.execute_query(sql, tuple(params) if params else None)
+        
+        # Get all students in the section
+        student_sql = 'SELECT * FROM students WHERE 1=1'
+        student_params = []
+        
+        if section_id:
+            student_sql += ' AND section = %s'
+            student_params.append(section_id)
+        
+        students = db.execute_query(student_sql, tuple(student_params) if student_params else None)
+        
+        # Calculate statistics per student
+        student_stats = {}
+        session_dates = set()
+        
+        for record in records:
+            student_id = record['student_id']
+            session_type = record.get('session_type', 'theory')
+            date = str(record['date'])
+            session_dates.add(date)
+            
+            if student_id not in student_stats:
+                student_stats[student_id] = {
+                    'student_id': student_id,
+                    'name': '',
+                    'section': record.get('section_id', ''),
+                    'total_sessions': 0,
+                    'present_count': 0,
+                    'absent_count': 0,
+                    'lab_sessions': 0,
+                    'lab_present': 0,
+                    'theory_sessions': 0,
+                    'theory_present': 0,
+                    'percentage': 0,
+                    'lab_percentage': 0,
+                    'theory_percentage': 0,
+                    'below_threshold': False
+                }
+            
+            if record.get('status') == 'present':
+                student_stats[student_id]['present_count'] += 1
+                if session_type == 'lab':
+                    student_stats[student_id]['lab_present'] += 1
+                else:
+                    student_stats[student_id]['theory_present'] += 1
+            else:
+                student_stats[student_id]['absent_count'] += 1
+            
+            if session_type == 'lab':
+                student_stats[student_id]['lab_sessions'] += 1
+            else:
+                student_stats[student_id]['theory_sessions'] += 1
+        
+        # Add student names and calculate percentages
+        for student in students:
+            student_id = student['student_id']
+            if student_id in student_stats:
+                student_stats[student_id]['name'] = student['name']
+            else:
+                # Student with no attendance records
+                student_stats[student_id] = {
+                    'student_id': student_id,
+                    'name': student['name'],
+                    'section': student.get('section', ''),
+                    'total_sessions': 0,
+                    'present_count': 0,
+                    'absent_count': len(session_dates),
+                    'lab_sessions': 0,
+                    'lab_present': 0,
+                    'theory_sessions': 0,
+                    'theory_present': 0,
+                    'percentage': 0,
+                    'lab_percentage': 0,
+                    'theory_percentage': 0,
+                    'below_threshold': True
+                }
+        
+        # Calculate percentages and thresholds
+        for student_id, stats in student_stats.items():
+            stats['total_sessions'] = stats['lab_sessions'] + stats['theory_sessions']
+            
+            if stats['total_sessions'] > 0:
+                stats['percentage'] = (stats['present_count'] / stats['total_sessions']) * 100
+            
+            if stats['lab_sessions'] > 0:
+                stats['lab_percentage'] = (stats['lab_present'] / stats['lab_sessions']) * 100
+                if stats['lab_percentage'] < 100:
+                    stats['below_threshold'] = True
+            
+            if stats['theory_sessions'] > 0:
+                stats['theory_percentage'] = (stats['theory_present'] / stats['theory_sessions']) * 100
+                if stats['theory_percentage'] < 80:
+                    stats['below_threshold'] = True
+        
+        # Convert to list and sort
+        report_data = sorted(student_stats.values(), key=lambda x: x['student_id'])
+        
+        return jsonify({
+            'report_type': report_type,
+            'section_id': section_id,
+            'course_name': course_name,
+            'start_date': start_date,
+            'end_date': end_date,
+            'total_sessions': len(session_dates),
+            'total_students': len(report_data),
+            'data': report_data
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error generating report: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to generate report', 'message': str(e)}), 500
+
+
+@instructor_bp.route('/reports/download/csv', methods=['POST'])
+@jwt_required()
+@role_required('instructor', 'admin')
+def download_report_csv():
+    """Download attendance report as CSV"""
+    try:
+        user_id = get_jwt_identity()
+        db = get_db()
+        data = request.get_json()
+        
+        # Get user info
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'User not found'}), 404
+        user = user_result[0]
+        
+        # Extract filters (same as generate_report)
+        report_type = data.get('report_type', 'custom')
+        section_id = data.get('section_id')
+        course_name = data.get('course_name')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        
+        # Build query
+        sql = 'SELECT * FROM attendance WHERE 1=1'
+        params = []
+        
+        if user['role'] == 'instructor':
+            sql += ' AND instructor_id = %s'
+            params.append(user_id)
+        
+        if section_id:
+            sql += ' AND section_id = %s'
+            params.append(section_id)
+        
+        if course_name:
+            sql += ' AND course_name = %s'
+            params.append(course_name)
+        
+        if start_date:
+            sql += ' AND date >= %s'
+            params.append(start_date)
+        
+        if end_date:
+            sql += ' AND date <= %s'
+            params.append(end_date)
+        
+        sql += ' ORDER BY date, timestamp'
+        
+        records = db.execute_query(sql, tuple(params) if params else None)
+        
+        # Get students
+        student_sql = 'SELECT * FROM students WHERE 1=1'
+        student_params = []
+        if section_id:
+            student_sql += ' AND section = %s'
+            student_params.append(section_id)
+        students = db.execute_query(student_sql, tuple(student_params) if student_params else None)
+        
+        # Calculate statistics
+        student_stats = {}
+        session_dates = set()
+        
+        for record in records:
+            student_id = record['student_id']
+            session_type = record.get('session_type', 'theory')
+            date = str(record['date'])
+            session_dates.add(date)
+            
+            if student_id not in student_stats:
+                student_stats[student_id] = {
+                    'student_id': student_id,
+                    'name': '',
+                    'section': record.get('section_id', ''),
+                    'total_sessions': 0,
+                    'present_count': 0,
+                    'absent_count': 0,
+                    'lab_sessions': 0,
+                    'lab_present': 0,
+                    'theory_sessions': 0,
+                    'theory_present': 0
+                }
+            
+            if record.get('status') == 'present':
+                student_stats[student_id]['present_count'] += 1
+                if session_type == 'lab':
+                    student_stats[student_id]['lab_present'] += 1
+                else:
+                    student_stats[student_id]['theory_present'] += 1
+            else:
+                student_stats[student_id]['absent_count'] += 1
+            
+            if session_type == 'lab':
+                student_stats[student_id]['lab_sessions'] += 1
+            else:
+                student_stats[student_id]['theory_sessions'] += 1
+        
+        # Add student names
+        for student in students:
+            student_id = student['student_id']
+            if student_id in student_stats:
+                student_stats[student_id]['name'] = student['name']
+            else:
+                student_stats[student_id] = {
+                    'student_id': student_id,
+                    'name': student['name'],
+                    'section': student.get('section', ''),
+                    'total_sessions': 0,
+                    'present_count': 0,
+                    'absent_count': len(session_dates),
+                    'lab_sessions': 0,
+                    'lab_present': 0,
+                    'theory_sessions': 0,
+                    'theory_present': 0
+                }
+        
+        # Create CSV
+        output = io.StringIO()
+        writer = csv.writer(output)
+        
+        # Write header with report info
+        writer.writerow([f'Attendance Report - {report_type.title()}'])
+        writer.writerow([f'Section: {section_id or "All"}'])
+        writer.writerow([f'Course: {course_name or "All"}'])
+        writer.writerow([f'Period: {start_date or "Start"} to {end_date or "End"}'])
+        writer.writerow([f'Total Sessions: {len(session_dates)}'])
+        writer.writerow([])
+        
+        # Write data header
+        writer.writerow([
+            'Student ID', 'Name', 'Section', 
+            'Total Sessions', 'Present', 'Absent', 'Overall %',
+            'Lab Sessions', 'Lab Present', 'Lab %',
+            'Theory Sessions', 'Theory Present', 'Theory %',
+            'Below Threshold'
+        ])
+        
+        # Write data
+        for student_id in sorted(student_stats.keys()):
+            stats = student_stats[student_id]
+            stats['total_sessions'] = stats['lab_sessions'] + stats['theory_sessions']
+            
+            overall_pct = (stats['present_count'] / stats['total_sessions'] * 100) if stats['total_sessions'] > 0 else 0
+            lab_pct = (stats['lab_present'] / stats['lab_sessions'] * 100) if stats['lab_sessions'] > 0 else 0
+            theory_pct = (stats['theory_present'] / stats['theory_sessions'] * 100) if stats['theory_sessions'] > 0 else 0
+            
+            below_threshold = (lab_pct < 100 and stats['lab_sessions'] > 0) or (theory_pct < 80 and stats['theory_sessions'] > 0)
+            
+            writer.writerow([
+                stats['student_id'],
+                stats['name'],
+                stats['section'],
+                stats['total_sessions'],
+                stats['present_count'],
+                stats['absent_count'],
+                f"{overall_pct:.1f}%",
+                stats['lab_sessions'],
+                stats['lab_present'],
+                f"{lab_pct:.1f}%",
+                stats['theory_sessions'],
+                stats['theory_present'],
+                f"{theory_pct:.1f}%",
+                'YES' if below_threshold else 'NO'
+            ])
+        
+        output.seek(0)
+        csv_data = output.getvalue()
+        csv_bytes = io.BytesIO(csv_data.encode('utf-8'))
+        csv_bytes.seek(0)
+        
+        filename = f'attendance_report_{report_type}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        
+        return send_file(
+            csv_bytes,
+            mimetype='text/csv',
+            as_attachment=True,
+            download_name=filename
+        )
+    
+    except Exception as e:
+        logger.error(f"Error downloading CSV report: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to download CSV', 'message': str(e)}), 500
+
+
+@instructor_bp.route('/reports/download/excel', methods=['POST'])
+@jwt_required()
+@role_required('instructor', 'admin')
+def download_report_excel():
+    """Download attendance report as Excel with formatting"""
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        
+        user_id = get_jwt_identity()
+        db = get_db()
+        data = request.get_json()
+        
+        # Get user info
+        user_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
+        if not user_result:
+            return jsonify({'error': 'User not found'}), 404
+        user = user_result[0]
+        
+        # Extract filters
+        report_type = data.get('report_type', 'custom')
+        section_id = data.get('section_id')
+        course_name = data.get('course_name')
+        start_date = data.get('start_date')
+        end_date = data.get('end_date')
+        
+        # Build query (same as CSV)
+        sql = 'SELECT * FROM attendance WHERE 1=1'
+        params = []
+        
+        if user['role'] == 'instructor':
+            sql += ' AND instructor_id = %s'
+            params.append(user_id)
+        
+        if section_id:
+            sql += ' AND section_id = %s'
+            params.append(section_id)
+        
+        if course_name:
+            sql += ' AND course_name = %s'
+            params.append(course_name)
+        
+        if start_date:
+            sql += ' AND date >= %s'
+            params.append(start_date)
+        
+        if end_date:
+            sql += ' AND date <= %s'
+            params.append(end_date)
+        
+        sql += ' ORDER BY date, timestamp'
+        
+        records = db.execute_query(sql, tuple(params) if params else None)
+        
+        # Get students
+        student_sql = 'SELECT * FROM students WHERE 1=1'
+        student_params = []
+        if section_id:
+            student_sql += ' AND section = %s'
+            student_params.append(section_id)
+        students = db.execute_query(student_sql, tuple(student_params) if student_params else None)
+        
+        # Calculate statistics (same logic)
+        student_stats = {}
+        session_dates = set()
+        
+        for record in records:
+            student_id = record['student_id']
+            session_type = record.get('session_type', 'theory')
+            date = str(record['date'])
+            session_dates.add(date)
+            
+            if student_id not in student_stats:
+                student_stats[student_id] = {
+                    'student_id': student_id,
+                    'name': '',
+                    'section': record.get('section_id', ''),
+                    'total_sessions': 0,
+                    'present_count': 0,
+                    'absent_count': 0,
+                    'lab_sessions': 0,
+                    'lab_present': 0,
+                    'theory_sessions': 0,
+                    'theory_present': 0
+                }
+            
+            if record.get('status') == 'present':
+                student_stats[student_id]['present_count'] += 1
+                if session_type == 'lab':
+                    student_stats[student_id]['lab_present'] += 1
+                else:
+                    student_stats[student_id]['theory_present'] += 1
+            else:
+                student_stats[student_id]['absent_count'] += 1
+            
+            if session_type == 'lab':
+                student_stats[student_id]['lab_sessions'] += 1
+            else:
+                student_stats[student_id]['theory_sessions'] += 1
+        
+        for student in students:
+            student_id = student['student_id']
+            if student_id in student_stats:
+                student_stats[student_id]['name'] = student['name']
+            else:
+                student_stats[student_id] = {
+                    'student_id': student_id,
+                    'name': student['name'],
+                    'section': student.get('section', ''),
+                    'total_sessions': 0,
+                    'present_count': 0,
+                    'absent_count': len(session_dates),
+                    'lab_sessions': 0,
+                    'lab_present': 0,
+                    'theory_sessions': 0,
+                    'theory_present': 0
+                }
+        
+        # Create Excel workbook
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Attendance Report"
+        
+        # Styles
+        title_font = Font(size=14, bold=True, color="FFFFFF")
+        title_fill = PatternFill(start_color="2563EB", end_color="2563EB", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        warning_fill = PatternFill(start_color="FEE2E2", end_color="FEE2E2", fill_type="solid")
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        # Write title
+        ws.merge_cells('A1:N1')
+        title_cell = ws['A1']
+        title_cell.value = f'Attendance Report - {report_type.title()}'
+        title_cell.font = title_font
+        title_cell.fill = title_fill
+        title_cell.alignment = Alignment(horizontal='center', vertical='center')
+        
+        # Write report info
+        ws['A2'] = f'Section: {section_id or "All"}'
+        ws['A3'] = f'Course: {course_name or "All"}'
+        ws['A4'] = f'Period: {start_date or "Start"} to {end_date or "End"}'
+        ws['A5'] = f'Total Sessions: {len(session_dates)}'
+        
+        # Write header row
+        headers = [
+            'Student ID', 'Name', 'Section',
+            'Total Sessions', 'Present', 'Absent', 'Overall %',
+            'Lab Sessions', 'Lab Present', 'Lab %',
+            'Theory Sessions', 'Theory Present', 'Theory %',
+            'Below Threshold'
+        ]
+        
+        for col, header in enumerate(headers, 1):
+            cell = ws.cell(row=7, column=col, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = border
+        
+        # Write data
+        row_idx = 8
+        for student_id in sorted(student_stats.keys()):
+            stats = student_stats[student_id]
+            stats['total_sessions'] = stats['lab_sessions'] + stats['theory_sessions']
+            
+            overall_pct = (stats['present_count'] / stats['total_sessions'] * 100) if stats['total_sessions'] > 0 else 0
+            lab_pct = (stats['lab_present'] / stats['lab_sessions'] * 100) if stats['lab_sessions'] > 0 else 0
+            theory_pct = (stats['theory_present'] / stats['theory_sessions'] * 100) if stats['theory_sessions'] > 0 else 0
+            
+            below_threshold = (lab_pct < 100 and stats['lab_sessions'] > 0) or (theory_pct < 80 and stats['theory_sessions'] > 0)
+            
+            row_data = [
+                stats['student_id'],
+                stats['name'],
+                stats['section'],
+                stats['total_sessions'],
+                stats['present_count'],
+                stats['absent_count'],
+                f"{overall_pct:.1f}%",
+                stats['lab_sessions'],
+                stats['lab_present'],
+                f"{lab_pct:.1f}%",
+                stats['theory_sessions'],
+                stats['theory_present'],
+                f"{theory_pct:.1f}%",
+                'YES' if below_threshold else 'NO'
+            ]
+            
+            for col, value in enumerate(row_data, 1):
+                cell = ws.cell(row=row_idx, column=col, value=value)
+                cell.border = border
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                
+                # Highlight rows below threshold
+                if below_threshold:
+                    cell.fill = warning_fill
+            
+            row_idx += 1
+        
+        # Auto-adjust column widths
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+            for cell in column:
+                try:
+                    if cell.value and len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        # Save to BytesIO
+        excel_bytes = io.BytesIO()
+        wb.save(excel_bytes)
+        excel_bytes.seek(0)
+        
+        filename = f'attendance_report_{report_type}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        
+        return send_file(
+            excel_bytes,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=filename
+        )
+    
+    except ImportError:
+        return jsonify({'error': 'openpyxl not installed', 'message': 'Install with: pip install openpyxl'}), 500
+    except Exception as e:
+        logger.error(f"Error downloading Excel report: {e}", exc_info=True)
+        return jsonify({'error': 'Failed to download Excel', 'message': str(e)}), 500

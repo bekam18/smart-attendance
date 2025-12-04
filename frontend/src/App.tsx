@@ -8,11 +8,14 @@ import AdminDashboard from './pages/AdminDashboard';
 import AdminAllRecords from './pages/AdminAllRecords';
 import AdminSettings from './pages/AdminSettings';
 import AdminSessions from './pages/AdminSessions';
+import AdminInstructors from './pages/AdminInstructors';
+import AdminStudents from './pages/AdminStudents';
 import InstructorDashboard from './pages/InstructorDashboard';
 import StudentDashboard from './pages/StudentDashboard';
 import AttendanceSession from './pages/AttendanceSession';
 import AttendanceRecords from './pages/AttendanceRecords';
 import InstructorSettings from './pages/InstructorSettings';
+import InstructorReports from './pages/InstructorReports';
 
 function ProtectedRoute({ children, allowedRoles }: { children: React.ReactNode; allowedRoles: string[] }) {
   const user = getStoredUser();
@@ -91,6 +94,24 @@ function App() {
         />
         
         <Route
+          path="/admin/instructors"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <AdminInstructors />
+            </ProtectedRoute>
+          }
+        />
+        
+        <Route
+          path="/admin/students"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <AdminStudents />
+            </ProtectedRoute>
+          }
+        />
+        
+        <Route
           path="/instructor"
           element={
             <ProtectedRoute allowedRoles={['instructor']}>
@@ -122,6 +143,15 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={['instructor']}>
               <InstructorSettings />
+            </ProtectedRoute>
+          }
+        />
+        
+        <Route
+          path="/instructor/reports"
+          element={
+            <ProtectedRoute allowedRoles={['instructor']}>
+              <InstructorReports />
             </ProtectedRoute>
           }
         />

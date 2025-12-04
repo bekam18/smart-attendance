@@ -3,7 +3,6 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 import os
 import uuid
-import json
 
 from db.mysql import get_db
 from utils.security import role_required
@@ -16,6 +15,7 @@ students_bp = Blueprint('students', __name__)
 @role_required('student')
 def get_profile():
     """Get student profile with courses and instructors"""
+    import json
     user_id = get_jwt_identity()
     db = get_db()
     
@@ -26,7 +26,10 @@ def get_profile():
         return jsonify({'error': 'Student profile not found'}), 404
     
     # Get courses and instructors for this student
-    instructor_query = "SELECT DISTINCT u.id, u.name, u.course_name, u.sections, u.class_year FROM users u WHERE u.role = 'instructor' AND u.class_year = %s"
+    instructor_query = "SELECT DISTINCT u.id, u.name, u.course_name, u.sections, u.class_year FROM users u WHERE u.role = 'instructor' AND u.class_year = %s"$')$')
+    '''
+    
+    import json
     instructors_result = db.execute_query(instructor_query, (student.get('year', ''),))
     
     courses = []
@@ -58,7 +61,7 @@ def get_profile():
         'year': student.get('year', ''),
         'section': student.get('section', ''),
         'face_registered': student.get('face_registered', False),
-        'courses': list(set(courses)),
+        'courses': list(set(courses)),  # Remove duplicates
         'instructors': instructors
     }
     
@@ -103,7 +106,11 @@ def register_face():
             saved_files.append(filename)
     
     # Update student record
-    update_query = "UPDATE students SET face_registered = %s, face_images_count = %s, last_face_update = %s WHERE student_id = %s"
+    update_query = '''
+        UPDATE students 
+        SET face_registered = %s, face_images_count = %s, last_face_update = %s
+        WHERE student_id = %s
+    '''
     db.execute_query(update_query, (True, len(saved_files), datetime.utcnow(), student['student_id']), fetch=False)
     
     return jsonify({
@@ -164,7 +171,11 @@ def get_attendance_stats():
     student_id = student['student_id']
     
     # Get all sessions for this student's year and section
-    sessions_query = "SELECT s.id, s.session_type, s.course_name FROM sessions s WHERE s.year = %s AND s.section_id = %s"
+    sessions_query = '''
+        SELECT s.id, s.session_type, s.course_name
+        FROM sessions s
+        WHERE s.year = %s AND s.section_id = %s
+    '''
     sessions = db.execute_query(sessions_query, (student.get('year', ''), student.get('section', '')))
     
     # Count total sessions by type
@@ -172,7 +183,12 @@ def get_attendance_stats():
     total_theory_sessions = len([s for s in sessions if s.get('session_type') == 'theory'])
     
     # Get attendance records
-    attendance_query = "SELECT session_type, status, COUNT(*) as count FROM attendance WHERE student_id = %s GROUP BY session_type, status"
+    attendance_query = '''
+        SELECT session_type, status, COUNT(*) as count
+        FROM attendance
+        WHERE student_id = %s
+        GROUP BY session_type, status
+    '''
     attendance_stats = db.execute_query(attendance_query, (student_id,))
     
     # Calculate statistics
@@ -191,7 +207,7 @@ def get_attendance_stats():
                 lab_present = count
             else:
                 lab_absent = count
-        else:
+        else:  # theory
             if status == 'present':
                 theory_present = count
             else:

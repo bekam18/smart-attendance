@@ -110,20 +110,21 @@ def detect_face():
                 'message': str(e)
             }), 400
         
-        # Detect faces with landmarks
+        # Detect faces with improved detector
         try:
-            print("🔍 Using OpenCV detector for face detection...")
-            from recognizer.detector import face_detector as opencv_detector
-            print("✓ OpenCV detector imported successfully")
+            print("🔍 Using Improved Face Detector...")
+            from recognizer.detector_improved import get_face_detector
+            
+            detector = get_face_detector(method='insightface')
+            print("✓ Improved detector loaded")
             
             print(f"🔍 Detecting faces in image shape: {img_array.shape}")
-            # Use OpenCV detector which is already working
-            bboxes = opencv_detector.detect_faces(img_array)
-            print(f"✓ Detection complete, found {len(bboxes)} faces")
             
-            faces = bboxes  # OpenCV returns list of (x, y, w, h) tuples
+            # Detect faces with confidence scores
+            results = detector.detect_faces(img_array, return_confidence=True)
+            print(f"✓ Detection complete, found {len(results)} faces")
             
-            if len(faces) == 0:
+            if len(results) == 0:
                 print("⚠️ No faces detected")
                 return jsonify({
                     'status': 'no_face',
@@ -131,11 +132,10 @@ def detect_face():
                 }), 200
             
             # Convert face data to JSON-serializable format
-            # OpenCV returns (x, y, w, h) tuples
             face_data = []
-            for bbox in faces:
+            for bbox, confidence in results:
                 x, y, w, h = bbox
-                print(f"✓ Face bbox: x={x}, y={y}, w={w}, h={h}")
+                print(f"✓ Face bbox: x={x}, y={y}, w={w}, h={h}, confidence={confidence:.2f}")
                 
                 face_data.append({
                     'bbox': {
@@ -144,7 +144,8 @@ def detect_face():
                         'w': int(w),
                         'h': int(h)
                     },
-                    'landmarks': []  # OpenCV doesn't provide landmarks
+                    'confidence': float(confidence),
+                    'landmarks': []  # Can be added if needed
                 })
             
             return jsonify({

@@ -12,7 +12,6 @@ export default function AdminSettings() {
     session_timeout_minutes: 120
   });
   
-  const [activeSessions, setActiveSessions] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
@@ -23,14 +22,8 @@ export default function AdminSettings() {
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      const [settingsRes, sessionsRes] = await Promise.all([
-        adminAPI.getAdminSettings(),
-        adminAPI.getActiveSessions()
-      ]);
-      
+      const settingsRes = await adminAPI.getAdminSettings();
       setSettings(settingsRes.data);
-      setActiveSessions(sessionsRes.data);
     } catch (error) {
       toast.error('Failed to load settings');
     } finally {
@@ -163,50 +156,12 @@ export default function AdminSettings() {
           </button>
         </div>
 
-        {/* Active Sessions */}
-        <div className="bg-white p-6 rounded-lg shadow">
-          <div className="flex items-center space-x-2 mb-4">
-            <Activity className="w-5 h-5 text-green-600" />
-            <h3 className="text-lg font-semibold">Active Sessions</h3>
-            <span className="px-2 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
-              {activeSessions.length} Running
-            </span>
-          </div>
-          
-          {activeSessions.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              <Activity className="w-12 h-12 mx-auto mb-2 opacity-20" />
-              <p>No active sessions at the moment</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {activeSessions.map((session) => (
-                <div key={session.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                  <div className="flex-1">
-                    <h4 className="font-medium text-gray-900">{session.name}</h4>
-                    <div className="flex items-center space-x-4 mt-1 text-sm text-gray-600">
-                      <span>Instructor: {session.instructor_name}</span>
-                      {session.section_id && <span>Section: {session.section_id}</span>}
-                      <span>Started: {new Date(session.start_time).toLocaleTimeString()}</span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-2xl font-bold text-green-600">{session.attendance_count}</div>
-                    <div className="text-xs text-gray-500">Attendees</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* System Info */}
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
           <h4 className="font-medium text-blue-900 mb-2">ℹ️ Settings Information</h4>
           <ul className="text-sm text-blue-800 space-y-1">
             <li>• Recognition threshold affects all face recognition operations</li>
             <li>• Session timeout applies to all instructor sessions</li>
-            <li>• Active sessions show real-time running attendance sessions</li>
             <li>• Changes take effect immediately after saving</li>
           </ul>
         </div>

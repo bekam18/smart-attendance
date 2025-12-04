@@ -107,6 +107,12 @@ export default function InstructorDashboard() {
               View Records
             </button>
             <button
+              onClick={() => navigate('/instructor/reports')}
+              className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+            >
+              Download Reports
+            </button>
+            <button
               onClick={() => navigate('/instructor/settings')}
               className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition"
             >

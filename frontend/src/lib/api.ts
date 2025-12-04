@@ -299,6 +299,44 @@ export const instructorAPI = {
   
   getStudentsList: () =>
     api.get('/api/instructor/students'),
+  
+  getSectionsByCourse: (courseName: string) =>
+    api.get('/api/instructor/sections-by-course', { params: { course_name: courseName } }),
+  
+  generateReport: (filters: any) =>
+    api.post('/api/instructor/reports/generate', filters),
+  
+  downloadReportCSV: async (filters: any) => {
+    const response = await api.post('/api/instructor/reports/download/csv', filters, {
+      responseType: 'blob'
+    });
+    
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    const reportType = filters.report_type || 'custom';
+    link.setAttribute('download', `attendance_report_${reportType}_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  },
+  
+  downloadReportExcel: async (filters: any) => {
+    const response = await api.post('/api/instructor/reports/download/excel', filters, {
+      responseType: 'blob'
+    });
+    
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    const reportType = filters.report_type || 'custom';
+    link.setAttribute('download', `attendance_report_${reportType}_${new Date().toISOString().split('T')[0]}.xlsx`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  },
 };
 
 // Debug API
