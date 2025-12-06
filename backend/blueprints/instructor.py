@@ -712,10 +712,14 @@ def generate_report():
                 session_types[session_id] = record.get('session_type', 'theory')
         
         # Second pass: count attendance per student
+        logger.info(f"Processing {len(records)} attendance records")
         for record in records:
             student_id = record['student_id']
             session_id = record.get('session_id')
             session_type = record.get('session_type', 'theory')
+            status = record.get('status')
+            
+            logger.info(f"Record: student={student_id}, session={session_id}, status={status}, type={session_type}")
             
             if student_id not in student_stats:
                 student_stats[student_id] = {
@@ -742,8 +746,9 @@ def generate_report():
             if session_id:
                 student_stats[student_id]['sessions_attended'].add(session_id)
                 
-                if record.get('status') == 'present':
+                if status == 'present':
                     student_stats[student_id]['present_count'] += 1
+                    logger.info(f"✅ Incremented present_count for {student_id}: now {student_stats[student_id]['present_count']}")
                     if session_type == 'lab':
                         student_stats[student_id]['lab_sessions_attended'].add(session_id)
                         student_stats[student_id]['lab_present'] += 1
@@ -816,6 +821,11 @@ def generate_report():
         
         # Convert to list and sort
         report_data = sorted(student_stats.values(), key=lambda x: x['student_id'])
+        
+        # Debug: Log final report data
+        logger.info(f"Final report: {len(report_data)} students, {len(session_ids)} sessions")
+        for student in report_data[:3]:  # Log first 3 students
+            logger.info(f"Student {student['student_id']}: present={student['present_count']}, absent={student['absent_count']}")
         
         return jsonify({
             'report_type': report_type,
@@ -892,21 +902,31 @@ def download_report_csv():
             student_params.append(section_id)
         students = db.execute_query(student_sql, tuple(student_params) if student_params else None)
         
-        # Calculate statistics
+        # Calculate statistics using CORRECT logic (same as generate_report)
         student_stats = {}
-        session_dates = set()
+        session_ids = set()
+        session_types = {}
         
+        # First pass: collect unique sessions
+        for record in records:
+            session_id = record.get('session_id')
+            if session_id:
+                session_ids.add(session_id)
+                session_types[session_id] = record.get('session_type', 'theory')
+        
+        # Second pass: count attendance per student
         for record in records:
             student_id = record['student_id']
+            session_id = record.get('session_id')
             session_type = record.get('session_type', 'theory')
-            date = str(record['date'])
-            session_dates.add(date)
+            status = record.get('status')
             
             if student_id not in student_stats:
                 student_stats[student_id] = {
                     'student_id': student_id,
                     'name': '',
                     'section': record.get('section_id', ''),
+                    'sessions_attended': set(),
                     'total_sessions': 0,
                     'present_count': 0,
                     'absent_count': 0,
@@ -916,38 +936,51 @@ def download_report_csv():
                     'theory_present': 0
                 }
             
-            if record.get('status') == 'present':
-                student_stats[student_id]['present_count'] += 1
-                if session_type == 'lab':
-                    student_stats[student_id]['lab_present'] += 1
-                else:
-                    student_stats[student_id]['theory_present'] += 1
-            else:
-                student_stats[student_id]['absent_count'] += 1
-            
-            if session_type == 'lab':
-                student_stats[student_id]['lab_sessions'] += 1
-            else:
-                student_stats[student_id]['theory_sessions'] += 1
+            # Track session attendance
+            if session_id:
+                student_stats[student_id]['sessions_attended'].add(session_id)
+                
+                if status == 'present':
+                    student_stats[student_id]['present_count'] += 1
+                    if session_type == 'lab':
+                        student_stats[student_id]['lab_present'] += 1
+                    else:
+                        student_stats[student_id]['theory_present'] += 1
         
-        # Add student names
+        # Count total lab and theory sessions
+        total_lab_sessions = sum(1 for sid, stype in session_types.items() if stype == 'lab')
+        total_theory_sessions = sum(1 for sid, stype in session_types.items() if stype == 'theory')
+        
+        # Add student names and calculate
         for student in students:
             student_id = student['student_id']
             if student_id in student_stats:
                 student_stats[student_id]['name'] = student['name']
+                student_stats[student_id]['lab_sessions'] = total_lab_sessions
+                student_stats[student_id]['theory_sessions'] = total_theory_sessions
+                student_stats[student_id]['total_sessions'] = len(session_ids)
+                student_stats[student_id]['absent_count'] = (
+                    student_stats[student_id]['total_sessions'] - 
+                    student_stats[student_id]['present_count']
+                )
             else:
+                # Student with no attendance records
                 student_stats[student_id] = {
                     'student_id': student_id,
                     'name': student['name'],
                     'section': student.get('section', ''),
-                    'total_sessions': 0,
+                    'total_sessions': len(session_ids),
                     'present_count': 0,
-                    'absent_count': len(session_dates),
-                    'lab_sessions': 0,
+                    'absent_count': len(session_ids),
+                    'lab_sessions': total_lab_sessions,
                     'lab_present': 0,
-                    'theory_sessions': 0,
+                    'theory_sessions': total_theory_sessions,
                     'theory_present': 0
                 }
+        
+        # Remove temporary sets
+        for stats in student_stats.values():
+            stats.pop('sessions_attended', None)
         
         # Create CSV
         output = io.StringIO()
@@ -958,7 +991,7 @@ def download_report_csv():
         writer.writerow([f'Section: {section_id or "All"}'])
         writer.writerow([f'Course: {course_name or "All"}'])
         writer.writerow([f'Period: {start_date or "Start"} to {end_date or "End"}'])
-        writer.writerow([f'Total Sessions: {len(session_dates)}'])
+        writer.writerow([f'Total Sessions: {len(session_ids)}'])
         writer.writerow([])
         
         # Write data header
@@ -973,7 +1006,6 @@ def download_report_csv():
         # Write data
         for student_id in sorted(student_stats.keys()):
             stats = student_stats[student_id]
-            stats['total_sessions'] = stats['lab_sessions'] + stats['theory_sessions']
             
             overall_pct = (stats['present_count'] / stats['total_sessions'] * 100) if stats['total_sessions'] > 0 else 0
             lab_pct = (stats['lab_present'] / stats['lab_sessions'] * 100) if stats['lab_sessions'] > 0 else 0
@@ -1025,6 +1057,7 @@ def download_report_excel():
     try:
         import openpyxl
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
         
         user_id = get_jwt_identity()
         db = get_db()
@@ -1043,7 +1076,7 @@ def download_report_excel():
         start_date = data.get('start_date')
         end_date = data.get('end_date')
         
-        # Build query (same as CSV)
+        # Build query
         sql = 'SELECT * FROM attendance WHERE 1=1'
         params = []
         
@@ -1079,21 +1112,31 @@ def download_report_excel():
             student_params.append(section_id)
         students = db.execute_query(student_sql, tuple(student_params) if student_params else None)
         
-        # Calculate statistics (same logic)
+        # Calculate statistics using CORRECT logic (same as generate_report)
         student_stats = {}
-        session_dates = set()
+        session_ids = set()
+        session_types = {}
         
+        # First pass: collect unique sessions
+        for record in records:
+            session_id = record.get('session_id')
+            if session_id:
+                session_ids.add(session_id)
+                session_types[session_id] = record.get('session_type', 'theory')
+        
+        # Second pass: count attendance per student
         for record in records:
             student_id = record['student_id']
+            session_id = record.get('session_id')
             session_type = record.get('session_type', 'theory')
-            date = str(record['date'])
-            session_dates.add(date)
+            status = record.get('status')
             
             if student_id not in student_stats:
                 student_stats[student_id] = {
                     'student_id': student_id,
                     'name': '',
                     'section': record.get('section_id', ''),
+                    'sessions_attended': set(),
                     'total_sessions': 0,
                     'present_count': 0,
                     'absent_count': 0,
@@ -1103,37 +1146,51 @@ def download_report_excel():
                     'theory_present': 0
                 }
             
-            if record.get('status') == 'present':
-                student_stats[student_id]['present_count'] += 1
-                if session_type == 'lab':
-                    student_stats[student_id]['lab_present'] += 1
-                else:
-                    student_stats[student_id]['theory_present'] += 1
-            else:
-                student_stats[student_id]['absent_count'] += 1
-            
-            if session_type == 'lab':
-                student_stats[student_id]['lab_sessions'] += 1
-            else:
-                student_stats[student_id]['theory_sessions'] += 1
+            # Track session attendance
+            if session_id:
+                student_stats[student_id]['sessions_attended'].add(session_id)
+                
+                if status == 'present':
+                    student_stats[student_id]['present_count'] += 1
+                    if session_type == 'lab':
+                        student_stats[student_id]['lab_present'] += 1
+                    else:
+                        student_stats[student_id]['theory_present'] += 1
         
+        # Count total lab and theory sessions
+        total_lab_sessions = sum(1 for sid, stype in session_types.items() if stype == 'lab')
+        total_theory_sessions = sum(1 for sid, stype in session_types.items() if stype == 'theory')
+        
+        # Add student names and calculate
         for student in students:
             student_id = student['student_id']
             if student_id in student_stats:
                 student_stats[student_id]['name'] = student['name']
+                student_stats[student_id]['lab_sessions'] = total_lab_sessions
+                student_stats[student_id]['theory_sessions'] = total_theory_sessions
+                student_stats[student_id]['total_sessions'] = len(session_ids)
+                student_stats[student_id]['absent_count'] = (
+                    student_stats[student_id]['total_sessions'] - 
+                    student_stats[student_id]['present_count']
+                )
             else:
+                # Student with no attendance records
                 student_stats[student_id] = {
                     'student_id': student_id,
                     'name': student['name'],
                     'section': student.get('section', ''),
-                    'total_sessions': 0,
+                    'total_sessions': len(session_ids),
                     'present_count': 0,
-                    'absent_count': len(session_dates),
-                    'lab_sessions': 0,
+                    'absent_count': len(session_ids),
+                    'lab_sessions': total_lab_sessions,
                     'lab_present': 0,
-                    'theory_sessions': 0,
+                    'theory_sessions': total_theory_sessions,
                     'theory_present': 0
                 }
+        
+        # Remove temporary sets
+        for stats in student_stats.values():
+            stats.pop('sessions_attended', None)
         
         # Create Excel workbook
         wb = openpyxl.Workbook()
@@ -1165,7 +1222,7 @@ def download_report_excel():
         ws['A2'] = f'Section: {section_id or "All"}'
         ws['A3'] = f'Course: {course_name or "All"}'
         ws['A4'] = f'Period: {start_date or "Start"} to {end_date or "End"}'
-        ws['A5'] = f'Total Sessions: {len(session_dates)}'
+        ws['A5'] = f'Total Sessions: {len(session_ids)}'
         
         # Write header row
         headers = [
@@ -1187,7 +1244,6 @@ def download_report_excel():
         row_idx = 8
         for student_id in sorted(student_stats.keys()):
             stats = student_stats[student_id]
-            stats['total_sessions'] = stats['lab_sessions'] + stats['theory_sessions']
             
             overall_pct = (stats['present_count'] / stats['total_sessions'] * 100) if stats['total_sessions'] > 0 else 0
             lab_pct = (stats['lab_present'] / stats['lab_sessions'] * 100) if stats['lab_sessions'] > 0 else 0
@@ -1224,15 +1280,18 @@ def download_report_excel():
             row_idx += 1
         
         # Auto-adjust column widths
-        for column in ws.columns:
+        for col_idx in range(1, len(headers) + 1):
             max_length = 0
-            column_letter = column[0].column_letter
-            for cell in column:
-                try:
-                    if cell.value and len(str(cell.value)) > max_length:
-                        max_length = len(str(cell.value))
-                except:
-                    pass
+            column_letter = get_column_letter(col_idx)
+            
+            for row in ws.iter_rows(min_col=col_idx, max_col=col_idx):
+                for cell in row:
+                    try:
+                        if cell.value and len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+            
             adjusted_width = min(max_length + 2, 50)
             ws.column_dimensions[column_letter].width = adjusted_width
         

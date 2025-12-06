@@ -46,7 +46,7 @@ export default function InstructorReports() {
     course_name: '',
     start_date: '',
     end_date: '',
-    specific_date: '2025-12-04' // Default to date with attendance data
+    specific_date: '2025-12-06' // Default to date with attendance data
   });
 
   useEffect(() => {
