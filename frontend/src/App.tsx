@@ -4,6 +4,8 @@ import { getStoredUser, isAuthenticated } from './lib/auth';
 
 // Pages
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminAllRecords from './pages/AdminAllRecords';
 import AdminSettings from './pages/AdminSettings';
@@ -39,6 +41,8 @@ function App() {
       <Toaster position="top-right" />
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         
         <Route
           path="/"

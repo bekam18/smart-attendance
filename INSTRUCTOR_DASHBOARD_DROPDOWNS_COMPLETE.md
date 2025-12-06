@@ -5,21 +5,21 @@ Added dropdown menus for Section, Year, and Course fields in the Instructor Dash
 
 ---
 
-## ✅ Changes Applied
+##  Changes Applied
 
-### 1. Section Dropdown ✅
+### 1. Section Dropdown 
 - **Predefined Options**: Section A, B, C, D
 - **Custom Option**: "Custom Section..." to enter any value
 - **Dynamic UI**: Switches between dropdown and text input
 - **Back Button**: Return to dropdown from custom input
 
-### 2. Year Dropdown ✅
+### 2. Year Dropdown 
 - **Predefined Options**: 1st Year, 2nd Year, 3rd Year, 4th Year
 - **Custom Option**: "Custom Year..." to enter any value
 - **Dynamic UI**: Switches between dropdown and text input
 - **Back Button**: Return to dropdown from custom input
 
-### 3. Course Dropdown ✅
+### 3. Course Dropdown 
 - **Instructor's Courses**: Shows courses assigned to the instructor
 - **Backward Compatible**: Falls back to single course_name if courses array not available
 - **Custom Option**: "Custom Course..." to enter any value
@@ -38,7 +38,7 @@ Section *
 │ ├─ Section B                   │
 │ ├─ Section C                   │
 │ ├─ Section D                   │
-│ └─ Custom Section...           │
+        │
 └─────────────────────────────────┘
 ```
 
@@ -51,7 +51,7 @@ Year *
 │ ├─ 2nd Year                    │
 │ ├─ 3rd Year                    │
 │ ├─ 4th Year                    │
-│ └─ Custom Year...              │
+│ └─ Custom Year...            │
 └─────────────────────────────────┘
 ```
 

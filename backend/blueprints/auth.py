@@ -147,3 +147,145 @@ def get_current_user():
     }
     
     return jsonify(user_info), 200
+
+
+# Password Reset Endpoints
+import secrets
+from datetime import timedelta
+from utils.email_service import email_service
+
+# Store reset tokens in memory (in production, use Redis or database)
+reset_tokens = {}
+
+@auth_bp.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    """Request password reset - sends email with reset token"""
+    try:
+        data = request.get_json()
+        email = data.get('email', '').strip()
+        
+        if not email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        db = get_db()
+        
+        # Find user by email
+        result = db.execute_query("SELECT * FROM users WHERE email = %s", (email,))
+        user = result[0] if result else None
+        
+        # Always return success to prevent email enumeration
+        if not user:
+            print(f"⚠️  Password reset requested for non-existent email: {email}")
+            return jsonify({
+                'message': 'If an account exists with this email, a password reset link has been sent.'
+            }), 200
+        
+        # Generate reset token
+        reset_token = secrets.token_urlsafe(32)
+        
+        # Store token with expiration (1 hour)
+        reset_tokens[reset_token] = {
+            'user_id': user['id'],
+            'email': email,
+            'expires_at': datetime.now() + timedelta(hours=1)
+        }
+        
+        # Send email
+        email_sent = email_service.send_password_reset_email(
+            to_email=email,
+            reset_token=reset_token,
+            user_name=user['name']
+        )
+        
+        if email_sent:
+            print(f"✅ Password reset email sent to: {email}")
+        else:
+            print(f"⚠️  Failed to send password reset email to: {email}")
+            print(f"🔗 Reset token (for testing): {reset_token}")
+        
+        return jsonify({
+            'message': 'If an account exists with this email, a password reset link has been sent.',
+            'token': reset_token if not email_service.smtp_username else None  # Only for development
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in forgot_password: {e}")
+        return jsonify({'error': 'Failed to process request'}), 500
+
+
+@auth_bp.route('/reset-password', methods=['POST'])
+def reset_password():
+    """Reset password using token"""
+    try:
+        data = request.get_json()
+        token = data.get('token', '').strip()
+        new_password = data.get('password', '').strip()
+        
+        if not token or not new_password:
+            return jsonify({'error': 'Token and new password are required'}), 400
+        
+        # Validate password strength
+        if len(new_password) < 6:
+            return jsonify({'error': 'Password must be at least 6 characters'}), 400
+        
+        # Check if token exists and is valid
+        if token not in reset_tokens:
+            return jsonify({'error': 'Invalid or expired reset token'}), 400
+        
+        token_data = reset_tokens[token]
+        
+        # Check if token has expired
+        if datetime.now() > token_data['expires_at']:
+            del reset_tokens[token]
+            return jsonify({'error': 'Reset token has expired'}), 400
+        
+        # Update password
+        db = get_db()
+        hashed_password = hash_password(new_password)
+        
+        db.execute_query(
+            "UPDATE users SET password = %s WHERE id = %s",
+            (hashed_password, token_data['user_id'])
+        )
+        
+        # Delete used token
+        del reset_tokens[token]
+        
+        print(f"✅ Password reset successful for user ID: {token_data['user_id']}")
+        
+        return jsonify({
+            'message': 'Password has been reset successfully. You can now login with your new password.'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in reset_password: {e}")
+        return jsonify({'error': 'Failed to reset password'}), 500
+
+
+@auth_bp.route('/verify-reset-token', methods=['POST'])
+def verify_reset_token():
+    """Verify if a reset token is valid"""
+    try:
+        data = request.get_json()
+        token = data.get('token', '').strip()
+        
+        if not token:
+            return jsonify({'valid': False, 'error': 'Token is required'}), 400
+        
+        if token not in reset_tokens:
+            return jsonify({'valid': False, 'error': 'Invalid token'}), 400
+        
+        token_data = reset_tokens[token]
+        
+        if datetime.now() > token_data['expires_at']:
+            del reset_tokens[token]
+            return jsonify({'valid': False, 'error': 'Token has expired'}), 400
+        
+        return jsonify({
+            'valid': True,
+            'email': token_data['email']
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in verify_reset_token: {e}")
+        return jsonify({'valid': False, 'error': 'Failed to verify token'}), 500

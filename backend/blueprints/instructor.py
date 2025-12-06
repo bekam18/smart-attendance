@@ -548,7 +548,7 @@ def get_instructor_info():
 @jwt_required()
 @role_required('instructor', 'admin')
 def get_sections_by_course():
-    """Get instructor's sections (simplified - returns all instructor sections)"""
+    """Get sections for a specific course that the instructor teaches"""
     try:
         user_id = get_jwt_identity()
         db = get_db()
@@ -557,24 +557,33 @@ def get_sections_by_course():
         if not course_name:
             return jsonify({'error': 'course_name parameter is required'}), 400
         
-        # Get instructor's assigned sections
-        user_result = db.execute_query('SELECT sections FROM users WHERE id = %s', (user_id,))
-        if not user_result:
-            return jsonify({'error': 'Instructor not found'}), 404
+        logger.info(f"Getting sections for instructor {user_id}, course: {course_name}")
         
-        import json
-        instructor_sections = []
-        if user_result[0].get('sections'):
-            try:
-                instructor_sections = json.loads(user_result[0]['sections'])
-            except (json.JSONDecodeError, TypeError):
-                instructor_sections = []
+        # Get sections from sessions table where this instructor has taught this course
+        query = """
+            SELECT DISTINCT section_id
+            FROM sessions
+            WHERE instructor_id = %s AND course_name = %s AND section_id IS NOT NULL
+            ORDER BY section_id
+        """
         
-        # Return all instructor sections
-        # (In a real system, you might filter by which sections have students in this course)
-        logger.info(f"Returning sections for instructor {user_id}, course {course_name}: {instructor_sections}")
+        result = db.execute_query(query, (user_id, course_name))
+        sections = [row['section_id'] for row in result]
         
-        return jsonify({'sections': instructor_sections}), 200
+        # If no sections found in sessions, try attendance table
+        if not sections:
+            query = """
+                SELECT DISTINCT section_id
+                FROM attendance
+                WHERE instructor_id = %s AND course_name = %s AND section_id IS NOT NULL
+                ORDER BY section_id
+            """
+            result = db.execute_query(query, (user_id, course_name))
+            sections = [row['section_id'] for row in result]
+        
+        logger.info(f"Found sections for {course_name}: {sections}")
+        
+        return jsonify({'sections': sections}), 200
     
     except Exception as e:
         logger.error(f"Error fetching sections by course: {e}", exc_info=True)
@@ -692,19 +701,30 @@ def generate_report():
         
         # Calculate statistics per student
         student_stats = {}
-        session_dates = set()
+        session_ids = set()
+        session_types = {}  # Track session types by session_id
         
+        # First pass: collect all unique sessions and their types
+        for record in records:
+            session_id = record.get('session_id')
+            if session_id:
+                session_ids.add(session_id)
+                session_types[session_id] = record.get('session_type', 'theory')
+        
+        # Second pass: count attendance per student
         for record in records:
             student_id = record['student_id']
+            session_id = record.get('session_id')
             session_type = record.get('session_type', 'theory')
-            date = str(record['date'])
-            session_dates.add(date)
             
             if student_id not in student_stats:
                 student_stats[student_id] = {
                     'student_id': student_id,
                     'name': '',
                     'section': record.get('section_id', ''),
+                    'sessions_attended': set(),  # Track which sessions this student attended
+                    'lab_sessions_attended': set(),
+                    'theory_sessions_attended': set(),
                     'total_sessions': 0,
                     'present_count': 0,
                     'absent_count': 0,
@@ -718,37 +738,52 @@ def generate_report():
                     'below_threshold': False
                 }
             
-            if record.get('status') == 'present':
-                student_stats[student_id]['present_count'] += 1
-                if session_type == 'lab':
-                    student_stats[student_id]['lab_present'] += 1
-                else:
-                    student_stats[student_id]['theory_present'] += 1
-            else:
-                student_stats[student_id]['absent_count'] += 1
-            
-            if session_type == 'lab':
-                student_stats[student_id]['lab_sessions'] += 1
-            else:
-                student_stats[student_id]['theory_sessions'] += 1
+            # Track session attendance
+            if session_id:
+                student_stats[student_id]['sessions_attended'].add(session_id)
+                
+                if record.get('status') == 'present':
+                    student_stats[student_id]['present_count'] += 1
+                    if session_type == 'lab':
+                        student_stats[student_id]['lab_sessions_attended'].add(session_id)
+                        student_stats[student_id]['lab_present'] += 1
+                    else:
+                        student_stats[student_id]['theory_sessions_attended'].add(session_id)
+                        student_stats[student_id]['theory_present'] += 1
+                # Note: absent_count will be calculated later as (total_sessions - present_count)
+        
+        # Count total lab and theory sessions
+        total_lab_sessions = sum(1 for sid, stype in session_types.items() if stype == 'lab')
+        total_theory_sessions = sum(1 for sid, stype in session_types.items() if stype == 'theory')
         
         # Add student names and calculate percentages
         for student in students:
             student_id = student['student_id']
             if student_id in student_stats:
                 student_stats[student_id]['name'] = student['name']
+                
+                # Set total sessions based on session types
+                student_stats[student_id]['lab_sessions'] = total_lab_sessions
+                student_stats[student_id]['theory_sessions'] = total_theory_sessions
+                student_stats[student_id]['total_sessions'] = len(session_ids)
+                
+                # Calculate absent count
+                student_stats[student_id]['absent_count'] = (
+                    student_stats[student_id]['total_sessions'] - 
+                    student_stats[student_id]['present_count']
+                )
             else:
-                # Student with no attendance records
+                # Student with no attendance records (all absent)
                 student_stats[student_id] = {
                     'student_id': student_id,
                     'name': student['name'],
                     'section': student.get('section', ''),
-                    'total_sessions': 0,
+                    'total_sessions': len(session_ids),
                     'present_count': 0,
-                    'absent_count': len(session_dates),
-                    'lab_sessions': 0,
+                    'absent_count': len(session_ids),
+                    'lab_sessions': total_lab_sessions,
                     'lab_present': 0,
-                    'theory_sessions': 0,
+                    'theory_sessions': total_theory_sessions,
                     'theory_present': 0,
                     'percentage': 0,
                     'lab_percentage': 0,
@@ -758,16 +793,22 @@ def generate_report():
         
         # Calculate percentages and thresholds
         for student_id, stats in student_stats.items():
-            stats['total_sessions'] = stats['lab_sessions'] + stats['theory_sessions']
+            # Remove temporary sets
+            stats.pop('sessions_attended', None)
+            stats.pop('lab_sessions_attended', None)
+            stats.pop('theory_sessions_attended', None)
             
+            # Calculate overall percentage
             if stats['total_sessions'] > 0:
                 stats['percentage'] = (stats['present_count'] / stats['total_sessions']) * 100
             
+            # Calculate lab percentage
             if stats['lab_sessions'] > 0:
                 stats['lab_percentage'] = (stats['lab_present'] / stats['lab_sessions']) * 100
                 if stats['lab_percentage'] < 100:
                     stats['below_threshold'] = True
             
+            # Calculate theory percentage
             if stats['theory_sessions'] > 0:
                 stats['theory_percentage'] = (stats['theory_present'] / stats['theory_sessions']) * 100
                 if stats['theory_percentage'] < 80:
@@ -782,7 +823,7 @@ def generate_report():
             'course_name': course_name,
             'start_date': start_date,
             'end_date': end_date,
-            'total_sessions': len(session_dates),
+            'total_sessions': len(session_ids),
             'total_students': len(report_data),
             'data': report_data
         }), 200

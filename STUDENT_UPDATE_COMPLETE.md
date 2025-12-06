@@ -2,7 +2,7 @@
 
 ## 🎯 What Was Done
 
-Replaced test students with **19 real students** organized into 3 sections.
+Replaced test students with **19 real students** organized into 2 sections.
 
 ---
 
@@ -10,10 +10,9 @@ Replaced test students with **19 real students** organized into 3 sections.
 
 | Section | Student IDs | Count |
 |---------|-------------|-------|
-| **Section A** | STU001-STU006 | 6 students |
-| **Section B** | STU008-STU014 | 7 students |
-| **Section C** | STU015-STU021 | 6 students |
-| **Total** | | **19 students** |
+| **Section A** | STU001-STU013 | 
+| **Section B** | STU014-STU021 | 
+
 
 ---
 
@@ -31,14 +30,10 @@ Replaced test students with **19 real students** organized into 3 sections.
 - STU004 / Gadisa123 (first name only)
 
 **Section B:**
-- STU008 / Nutoli123
-- STU013 / Bekam123 (first name only)
+- STU0016/ Bacha123
+- 
 
-**Section C:**
-- STU015 / Firansbekan123
-- STU016 / Bacha123 (first name only)
 
----
 
 ## 🚀 Installation
 
@@ -94,16 +89,16 @@ python app.py
 5. **STU005** - Yonas
 6. **STU006** - Merihun
 
-### Section B (7 students)
+
 7. **STU008** - Nutoli
 8. **STU009** - Tedy
 9. **STU010** - Ajme
 10. **STU011** - Bedo
 11. **STU012** - Milki
 12. **STU013** - Bekam Ayele
+### Section B (7 students)
 13. **STU014** - Yabsira
 
-### Section C (6 students)
 14. **STU015** - Firansbekan
 15. **STU016** - Bacha Eshetu
 16. **STU017** - Yohannis Tekelgin
@@ -157,9 +152,9 @@ python verify_students.py
 Expected output:
 ```
 Total Students: 19
-Section A: 6
+Section A: 13
 Section B: 7
-Section C: 6
+
 ✅ All expected student IDs present
 ✅ All student user accounts verified
 ```
@@ -181,10 +176,6 @@ curl -X POST http://localhost:5000/api/auth/login \
 - Username: Student ID (e.g., STU001)
 - Password: {FirstName}123 (e.g., Nabila123)
 
-### 2. Register Face
-- Navigate to "Register Face"
-- Upload 5-10 photos
-- System trains face recognition
 
 ### 3. Attend Sessions
 - Instructor starts session
@@ -195,11 +186,7 @@ curl -X POST http://localhost:5000/api/auth/login \
 
 ## 👨‍🏫 For Instructors
 
-### Section-Based Sessions
-Instructors can now create sessions for specific sections:
-- Section A: 6 students
-- Section B: 7 students
-- Section C: 6 students
+
 
 ### Taking Attendance
 1. Start session for a section
@@ -262,9 +249,9 @@ After running update script:
 - [ ] Run `update_students.bat`
 - [ ] Run `backend/verify_students.py`
 - [ ] Check: 19 students in database
-- [ ] Check: Section A has 6 students
-- [ ] Check: Section B has 7 students
-- [ ] Check: Section C has 6 students
+- [ ] Check: Section A has 10 students
+- [ ] Check: Section B has 9 students
+- [ ] 
 - [ ] Test: Login as STU001 / Nabila123
 - [ ] Test: Login as STU008 / Nutoli123
 - [ ] Test: Login as STU015 / Firansbekan123
@@ -277,7 +264,7 @@ After running update script:
 
 Your student database is now updated with:
 - ✅ 19 real students
-- ✅ 3 sections (A, B, C)
+- ✅ 2 sections (A, B, )
 - ✅ Working login credentials
 - ✅ Ready for face registration
 - ✅ Ready for attendance tracking

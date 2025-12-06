@@ -276,12 +276,22 @@ def get_all_attendance():
     
     print(f"📊 Admin fetching attendance with filters: {dict(zip(['start_date', 'end_date', 'student_id', 'section', 'instructor_id'], [start_date, end_date, student_id, section, instructor_id]))}")
     
-    # Get attendance records with joins
+    # Get attendance records with joins (including sessions and course info)
     query = f"""
-        SELECT a.*, s.name as student_name, s.section, u.name as instructor_name
+        SELECT 
+            a.*, 
+            s.name as student_name, 
+            s.section, 
+            u.name as instructor_name,
+            sess.name as session_name,
+            sess.session_type,
+            sess.time_block,
+            sess.course_name,
+            sess.course as course_code
         FROM attendance a
         LEFT JOIN students s ON a.student_id = s.student_id
         LEFT JOIN users u ON a.instructor_id = u.id
+        LEFT JOIN sessions sess ON a.session_id = sess.id
         {where_clause}
         ORDER BY a.timestamp DESC
         LIMIT 1000
@@ -291,6 +301,12 @@ def get_all_attendance():
     
     records = []
     for record in attendance_records:
+        # Build session display with course info
+        session_display = record.get('session_name') or 'Unknown'
+        course_name = record.get('course_name')
+        if course_name and session_display != 'Unknown':
+            session_display = f"{course_name} - {session_display}"
+        
         records.append({
             'id': str(record['id']),
             'student_id': record['student_id'],
@@ -299,7 +315,11 @@ def get_all_attendance():
             'instructor_name': record.get('instructor_name', 'Unknown'),
             'instructor_id': record.get('instructor_id', ''),
             'session_id': record.get('session_id', ''),
-            'session_name': 'Unknown',  # TODO: Add sessions table join
+            'session_name': session_display,
+            'session_type': record.get('session_type', ''),
+            'time_block': record.get('time_block', ''),
+            'course_name': course_name or 'N/A',
+            'course_code': record.get('course_code', ''),
             'timestamp': record['timestamp'].isoformat() if record.get('timestamp') else '',
             'date': record['date'],
             'confidence': float(record.get('confidence', 0)),
@@ -310,22 +330,246 @@ def get_all_attendance():
     return jsonify(records), 200
 
 
-# TODO: Fix CSV export for MySQL
-# @admin_bp.route('/attendance/export/csv', methods=['GET'])
-# @jwt_required()
-# @role_required('admin')
-# def export_attendance_csv():
-#     """Export all attendance records to CSV (admin only)"""
-#     return jsonify({'error': 'CSV export temporarily disabled during MySQL migration'}), 501
+@admin_bp.route('/attendance/export/csv', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def export_attendance_csv():
+    """Export all attendance records to CSV (admin only)"""
+    from flask import make_response
+    import csv
+    from io import StringIO
+    
+    try:
+        db = get_db()
+        
+        # Get filters from query params
+        course = request.args.get('course')
+        section = request.args.get('section')
+        year = request.args.get('year')
+        date = request.args.get('date')
+        
+        print(f"📊 CSV Export requested - Filters: course={course}, section={section}, year={year}, date={date}")
+        
+        # Build query with correct column names
+        query = """
+            SELECT 
+                a.id,
+                a.student_id,
+                s.name as student_name,
+                a.course_name,
+                a.section_id,
+                a.class_year,
+                a.session_id,
+                a.status,
+                a.confidence,
+                a.timestamp,
+                a.date,
+                a.instructor_id
+            FROM attendance a
+            LEFT JOIN students s ON a.student_id = s.student_id
+            WHERE 1=1
+        """
+        params = []
+        
+        if course:
+            query += " AND a.course_name = %s"
+            params.append(course)
+        if section:
+            query += " AND a.section_id = %s"
+            params.append(section)
+        if year:
+            query += " AND a.class_year = %s"
+            params.append(year)
+        if date:
+            query += " AND a.date = %s"
+            params.append(date)
+        
+        query += " ORDER BY a.timestamp DESC"
+        
+        # Execute query and get all records
+        records = db.execute_query(query, tuple(params) if params else None)
+        print(f"📊 Found {len(records)} records to export")
+        
+        # Create CSV
+        si = StringIO()
+        writer = csv.writer(si)
+        
+        # Write header
+        writer.writerow([
+            'ID', 'Student ID', 'Student Name', 'Course', 'Section', 
+            'Year', 'Session ID', 'Status', 'Confidence', 'Date', 'Timestamp', 'Instructor ID'
+        ])
+        
+        # Write data
+        for record in records:
+            try:
+                writer.writerow([
+                    record.get('id', ''),
+                    record.get('student_id', ''),
+                    record.get('student_name') or 'Unknown',
+                    record.get('course_name', ''),
+                    record.get('section_id', ''),
+                    record.get('class_year', ''),
+                    record.get('session_id', ''),
+                    record.get('status', ''),
+                    f"{record.get('confidence', 0):.2f}" if record.get('confidence') is not None else 'N/A',
+                    str(record.get('date', '')),
+                    str(record.get('timestamp', '')),
+                    record.get('instructor_id') or 'N/A'
+                ])
+            except Exception as row_error:
+                print(f"⚠️  Error writing row: {row_error}")
+                print(f"   Record: {record}")
+                continue
+        
+        # Create response
+        output = si.getvalue()
+        si.close()
+        
+        print(f"✅ CSV generated successfully ({len(output)} bytes)")
+        
+        response = make_response(output)
+        response.headers['Content-Type'] = 'text/csv; charset=utf-8'
+        response.headers['Content-Disposition'] = f'attachment; filename=attendance_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
+        response.headers['Cache-Control'] = 'no-cache'
+        
+        return response
+        
+    except Exception as e:
+        print(f"❌ Error exporting CSV: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to export CSV: {str(e)}'}), 500
 
 
-# TODO: Fix Excel export for MySQL
-# @admin_bp.route('/attendance/export/excel', methods=['GET'])
-# @jwt_required()
-# @role_required('admin')
-# def export_attendance_excel():
-#     """Export all attendance records to Excel (admin only)"""
-#     return jsonify({'error': 'Excel export temporarily disabled during MySQL migration'}), 501
+@admin_bp.route('/attendance/export/excel', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def export_attendance_excel():
+    """Export all attendance records to Excel (admin only)"""
+    from flask import make_response
+    import pandas as pd
+    from io import BytesIO
+    
+    try:
+        db = get_db()
+        
+        # Get filters from query params
+        course = request.args.get('course')
+        section = request.args.get('section')
+        year = request.args.get('year')
+        date = request.args.get('date')
+        
+        print(f"📊 Excel Export requested - Filters: course={course}, section={section}, year={year}, date={date}")
+        
+        # Build query with correct column names
+        query = """
+            SELECT 
+                a.id,
+                a.student_id,
+                s.name as student_name,
+                a.course_name,
+                a.section_id,
+                a.class_year,
+                a.session_id,
+                a.status,
+                a.confidence,
+                a.timestamp,
+                a.date,
+                a.instructor_id
+            FROM attendance a
+            LEFT JOIN students s ON a.student_id = s.student_id
+            WHERE 1=1
+        """
+        params = []
+        
+        if course:
+            query += " AND a.course_name = %s"
+            params.append(course)
+        if section:
+            query += " AND a.section_id = %s"
+            params.append(section)
+        if year:
+            query += " AND a.class_year = %s"
+            params.append(year)
+        if date:
+            query += " AND a.date = %s"
+            params.append(date)
+        
+        query += " ORDER BY a.timestamp DESC"
+        
+        # Execute query and get all records
+        records = db.execute_query(query, tuple(params) if params else None)
+        print(f"📊 Found {len(records)} records to export")
+        
+        if not records:
+            # Return empty Excel file with headers
+            df = pd.DataFrame(columns=[
+                'ID', 'Student ID', 'Student Name', 'Course', 'Section',
+                'Year', 'Session ID', 'Status', 'Confidence', 'Date', 'Timestamp', 'Instructor ID'
+            ])
+        else:
+            # Convert to DataFrame
+            df = pd.DataFrame(records)
+            
+            # Rename columns for better readability
+            df = df.rename(columns={
+                'id': 'ID',
+                'student_id': 'Student ID',
+                'student_name': 'Student Name',
+                'course_name': 'Course',
+                'section_id': 'Section',
+                'class_year': 'Year',
+                'session_id': 'Session ID',
+                'status': 'Status',
+                'confidence': 'Confidence',
+                'date': 'Date',
+                'timestamp': 'Timestamp',
+                'instructor_id': 'Instructor ID'
+            })
+            
+            # Format confidence
+            if 'Confidence' in df.columns:
+                df['Confidence'] = df['Confidence'].apply(lambda x: f"{x:.2f}" if pd.notna(x) else 'N/A')
+            
+            # Fill NaN values
+            df = df.fillna('N/A')
+        
+        # Create Excel file in memory
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Attendance Records')
+            
+            # Auto-adjust column widths
+            worksheet = writer.sheets['Attendance Records']
+            for idx, col in enumerate(df.columns):
+                try:
+                    max_length = max(
+                        df[col].astype(str).apply(len).max(),
+                        len(col)
+                    ) + 2
+                    col_letter = chr(65 + idx) if idx < 26 else chr(65 + idx // 26 - 1) + chr(65 + idx % 26)
+                    worksheet.column_dimensions[col_letter].width = min(max_length, 50)
+                except:
+                    pass
+        
+        output.seek(0)
+        
+        print(f"✅ Excel generated successfully ({output.getbuffer().nbytes} bytes)")
+        
+        # Create response
+        response = make_response(output.read())
+        response.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        response.headers['Content-Disposition'] = f'attachment; filename=attendance_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.xlsx'
+        response.headers['Cache-Control'] = 'no-cache'
+        
+        return response
+        
+    except Exception as e:
+        print(f"❌ Error exporting Excel: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': f'Failed to export Excel: {str(e)}'}), 500
 
 @admin_bp.route('/upload-model', methods=['POST'])
 @jwt_required()

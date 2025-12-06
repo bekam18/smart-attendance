@@ -290,34 +290,34 @@ export default function AdminAllRecords() {
           ) : (
             <>
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="w-full min-w-max">
                   <thead className="bg-gray-50 border-b">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Section</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Instructor</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Student</th>
+                      <th className="px-2 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Section</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Instructor</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Session</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Confidence</th>
+                      <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
                     {filteredRecords.map((record) => (
                       <tr key={record.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.date}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900">{record.date}</td>
+                        <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900">
                           {new Date(record.timestamp).toLocaleTimeString()}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-4 py-3 whitespace-nowrap">
                           <div className="text-sm font-medium text-gray-900">{record.student_name}</div>
                           <div className="text-sm text-gray-500">{record.student_id}</div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.section}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.instructor_name}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.session_name}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <td className="px-2 py-3 whitespace-nowrap text-sm text-center text-gray-900">{record.section}</td>
+                        <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900">{record.instructor_name}</td>
+                        <td className="px-3 py-3 text-sm text-gray-900 max-w-xs">{record.session_name}</td>
+                        <td className="px-3 py-3 whitespace-nowrap text-sm text-gray-900">
                           <span className={`px-2 py-1 rounded-full text-xs ${
                             record.confidence >= 0.80 ? 'bg-green-100 text-green-800' :
                             record.confidence >= 0.60 ? 'bg-yellow-100 text-yellow-800' :
@@ -326,8 +326,10 @@ export default function AdminAllRecords() {
                             {(record.confidence * 100).toFixed(1)}%
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className="px-2 py-1 text-xs rounded-full bg-green-100 text-green-800">
+                        <td className="px-3 py-3 whitespace-nowrap">
+                          <span className={`px-2 py-1 text-xs rounded-full ${
+                            record.status === 'present' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                          }`}>
                             {record.status}
                           </span>
                         </td>

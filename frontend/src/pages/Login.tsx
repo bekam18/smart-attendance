@@ -48,7 +48,7 @@ export default function Login() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 flex flex-col">
       {/* Main Content */}
-      <div className="flex-1 flex items-center justify-center p-4">
+      <div className="flex-1 flex items-center justify-center p-4 pt-24">
         <div className="w-full max-w-md">
           {/* Login Card */}
           <div className="bg-white rounded-2xl shadow-xl p-8">
@@ -94,9 +94,13 @@ export default function Login() {
               </div>
 
               <div className="text-right">
-                <a href="#" className="text-xs text-blue-500 hover:text-blue-600 font-medium">
+                <button
+                  type="button"
+                  onClick={() => navigate('/forgot-password')}
+                  className="text-xs text-blue-500 hover:text-blue-600 font-medium"
+                >
                   Forgot password?
-                </a>
+                </button>
               </div>
 
               <button

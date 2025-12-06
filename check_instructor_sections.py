@@ -1,43 +1,48 @@
-import mysql.connector
-import json
+import sys
+sys.path.insert(0, 'backend')
 
-# Connect to database
-conn = mysql.connector.connect(
-    host='localhost',
-    user='root',
-    password='Bekam@1818',
-    database='smart_attendance'
-)
+from db.mysql import get_db
 
-cursor = conn.cursor(dictionary=True)
+db = get_db()
 
-# Get instructor info
-cursor.execute("SELECT id, username, sections, courses FROM users WHERE role = 'instructor'")
-instructors = cursor.fetchall()
+print("\n" + "="*60)
+print("CHECKING INSTRUCTOR SECTIONS")
+print("="*60 + "\n")
 
-print("=== INSTRUCTOR SECTIONS ===\n")
-for instructor in instructors:
-    print(f"Instructor: {instructor['username']} (ID: {instructor['id']})")
-    
-    # Parse sections
-    sections = []
-    if instructor['sections']:
-        try:
-            sections = json.loads(instructor['sections'])
-        except:
-            sections = []
-    
-    # Parse courses
-    courses = []
-    if instructor['courses']:
-        try:
-            courses = json.loads(instructor['courses'])
-        except:
-            courses = []
-    
-    print(f"  Sections: {sections}")
-    print(f"  Courses: {courses}")
-    print()
+# Check instructor's sections field
+print("1. Checking instructor's sections field:")
+result = db.execute_query("SELECT id, username, name, sections FROM users WHERE role = 'instructor'")
+for instructor in result:
+    print(f"\nInstructor: {instructor['name']} ({instructor['username']})")
+    print(f"  Sections field: {instructor.get('sections')}")
 
-cursor.close()
-conn.close()
+# Check actual sections in sessions table
+print("\n2. Checking sections in sessions table:")
+result = db.execute_query("SELECT DISTINCT section_id, course_name FROM sessions ORDER BY course_name, section_id")
+print("\nSections by course:")
+current_course = None
+for row in result:
+    if row['course_name'] != current_course:
+        current_course = row['course_name']
+        print(f"\n{current_course}:")
+    print(f"  - Section {row['section_id']}")
+
+# Check sections in students table
+print("\n3. Checking sections in students table:")
+result = db.execute_query("SELECT DISTINCT section FROM students WHERE section IS NOT NULL ORDER BY section")
+print("\nStudent sections:")
+for row in result:
+    print(f"  - Section {row['section']}")
+
+# Check sections in attendance table
+print("\n4. Checking sections in attendance table:")
+result = db.execute_query("SELECT DISTINCT section_id, course_name FROM attendance WHERE section_id IS NOT NULL ORDER BY course_name, section_id")
+print("\nAttendance sections by course:")
+current_course = None
+for row in result:
+    if row['course_name'] != current_course:
+        current_course = row['course_name']
+        print(f"\n{current_course}:")
+    print(f"  - Section {row['section_id']}")
+
+print("\n" + "="*60 + "\n")

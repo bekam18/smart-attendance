@@ -55,6 +55,15 @@ export const authAPI = {
   
   getCurrentUser: () =>
     api.get('/api/auth/me'),
+  
+  forgotPassword: (email: string) =>
+    api.post('/api/auth/forgot-password', { email }),
+  
+  verifyResetToken: (token: string) =>
+    api.post('/api/auth/verify-reset-token', { token }),
+  
+  resetPassword: (token: string, password: string) =>
+    api.post('/api/auth/reset-password', { token, password }),
 };
 
 // Admin API

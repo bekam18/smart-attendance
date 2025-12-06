@@ -53,11 +53,11 @@ class MySQLConnection:
         cursor = None
         try:
             conn = self.get_connection()
-            cursor = conn.cursor(dictionary=True)
+            cursor = conn.cursor(dictionary=True, buffered=True)  # Added buffered=True
             
             cursor.execute(query, params or ())
             
-            if query.strip().upper().startswith('SELECT'):
+            if query.strip().upper().startswith('SELECT') or query.strip().upper().startswith('SHOW') or query.strip().upper().startswith('DESCRIBE'):
                 result = cursor.fetchall()
                 return result
             else:
