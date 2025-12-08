@@ -85,12 +85,30 @@ export default function InstructorDashboard() {
   };
 
   const handleEndSession = async (sessionId: string) => {
+    if (!confirm('End this session permanently for the semester? This cannot be undone.')) {
+      return;
+    }
+    
     try {
-      await attendanceAPI.endSession(sessionId);
-      toast.success('Session ended');
+      await attendanceAPI.endSession(sessionId, 'semester');
+      toast.success('Session ended permanently');
       loadSessions();
     } catch (error) {
       toast.error('Failed to end session');
+    }
+  };
+
+  const handleReopenSession = async (sessionId: string) => {
+    if (!confirm('Reopen this session for attendance? Previous attendance records will be preserved.')) {
+      return;
+    }
+    
+    try {
+      await attendanceAPI.reopenSession(sessionId);
+      toast.success('Session reopened successfully');
+      loadSessions();
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Failed to reopen session');
     }
   };
 
@@ -393,12 +411,19 @@ export default function InstructorDashboard() {
                       <Clock className="w-4 h-4" />
                       <span>{new Date(session.start_time).toLocaleString()}</span>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs ${
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       session.status === 'active' 
                         ? 'bg-green-100 text-green-800' 
+                        : session.status === 'stopped_daily'
+                        ? 'bg-orange-100 text-orange-800'
+                        : session.status === 'ended_semester'
+                        ? 'bg-red-100 text-red-800'
                         : 'bg-gray-100 text-gray-800'
                     }`}>
-                      {session.status}
+                      {session.status === 'active' ? '🟢 Active' :
+                       session.status === 'stopped_daily' ? '🟠 Stopped (Daily)' :
+                       session.status === 'ended_semester' ? '🔴 Ended (Semester)' :
+                       session.status}
                     </span>
                     <span>Attendance: {session.attendance_count}</span>
                   </div>
@@ -419,6 +444,37 @@ export default function InstructorDashboard() {
                       >
                         <StopCircle className="w-4 h-4" />
                         <span>End</span>
+                      </button>
+                    </>
+                  ) : session.can_reopen ? (
+                    <>
+                      <button
+                        onClick={() => handleReopenSession(session.id)}
+                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                      >
+                        🔄 Reopen Session
+                      </button>
+                      <button
+                        onClick={() => navigate(`/instructor/session/${session.id}`)}
+                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                      >
+                        View Details
+                      </button>
+                    </>
+                  ) : session.hours_until_reopen !== null && session.hours_until_reopen !== undefined ? (
+                    <>
+                      <button
+                        disabled
+                        className="px-4 py-2 bg-gray-400 text-white rounded-lg cursor-not-allowed"
+                        title={`Can reopen in ${session.hours_until_reopen.toFixed(1)} hours`}
+                      >
+                        ⏳ Reopen in {session.hours_until_reopen.toFixed(1)}h
+                      </button>
+                      <button
+                        onClick={() => navigate(`/instructor/session/${session.id}`)}
+                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                      >
+                        View Details
                       </button>
                     </>
                   ) : (

@@ -7,12 +7,19 @@ import toast from 'react-hot-toast';
 export default function StudentDashboard() {
   const [profile, setProfile] = useState<any>(null);
   const [attendance, setAttendance] = useState<any[]>([]);
+  const [allAttendance, setAllAttendance] = useState<any[]>([]);
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [courseFilter, setCourseFilter] = useState<string>('');
+  const [instructorFilter, setInstructorFilter] = useState<string>('');
 
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    filterAttendance();
+  }, [courseFilter, instructorFilter, allAttendance]);
 
   const loadData = async () => {
     try {
@@ -29,6 +36,7 @@ export default function StudentDashboard() {
       ]);
       
       setProfile(profileRes.data);
+      setAllAttendance(attendanceRes.data);
       setAttendance(attendanceRes.data);
       setStats(statsRes);
     } catch (error) {
@@ -37,6 +45,25 @@ export default function StudentDashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const filterAttendance = () => {
+    let filtered = [...allAttendance];
+    
+    if (courseFilter) {
+      filtered = filtered.filter(record => record.course_name === courseFilter);
+    }
+    
+    if (instructorFilter) {
+      filtered = filtered.filter(record => record.instructor_id === parseInt(instructorFilter));
+    }
+    
+    setAttendance(filtered);
+  };
+
+  const resetFilters = () => {
+    setCourseFilter('');
+    setInstructorFilter('');
   };
 
   if (loading) {
@@ -320,10 +347,60 @@ export default function StudentDashboard() {
         {/* Attendance History */}
         <div className="bg-white rounded-lg shadow">
           <div className="p-6 border-b">
-            <h3 className="text-lg font-semibold flex items-center">
+            <h3 className="text-lg font-semibold flex items-center mb-4">
               <Calendar className="w-5 h-5 mr-2 text-blue-600" />
               Attendance History
             </h3>
+            
+            {/* Filters */}
+            <div className="flex flex-wrap gap-4 items-end">
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Filter by Course
+                </label>
+                <select
+                  value={courseFilter}
+                  onChange={(e) => setCourseFilter(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">All Courses</option>
+                  {profile?.courses?.map((course: string) => (
+                    <option key={course} value={course}>{course}</option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="flex-1 min-w-[200px]">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Filter by Instructor
+                </label>
+                <select
+                  value={instructorFilter}
+                  onChange={(e) => setInstructorFilter(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                >
+                  <option value="">All Instructors</option>
+                  {profile?.instructors?.map((instructor: any) => (
+                    <option key={instructor.id} value={instructor.id}>
+                      {instructor.name} - {instructor.course}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              {(courseFilter || instructorFilter) && (
+                <button
+                  onClick={resetFilters}
+                  className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+                >
+                  Clear Filters
+                </button>
+              )}
+              
+              <div className="text-sm text-gray-600">
+                Showing {attendance.length} of {allAttendance.length} records
+              </div>
+            </div>
           </div>
           
           {attendance.length === 0 ? (
@@ -340,6 +417,7 @@ export default function StudentDashboard() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Time</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Course</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Instructor</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Session</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
@@ -353,6 +431,7 @@ export default function StudentDashboard() {
                         {new Date(record.timestamp).toLocaleTimeString()}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.course_name}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.instructor_name || 'N/A'}</td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{record.session_name}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${

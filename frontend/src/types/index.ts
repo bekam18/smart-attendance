@@ -41,8 +41,10 @@ export interface Session {
   year?: string;
   start_time: string;
   end_time: string | null;
-  status: 'active' | 'completed';
+  status: 'active' | 'completed' | 'stopped_daily' | 'ended_semester';
   attendance_count: number;
+  can_reopen?: boolean;
+  hours_until_reopen?: number | null;
 }
 
 export interface RecognitionResult {

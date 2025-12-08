@@ -406,17 +406,28 @@ def recognize_face():
             
             print(f"✓ Section/Year validated: {student_section}, {student_year}")
             
-            # Check if already marked present in this session
+            # Check if already marked present in this session TODAY
+            # Note: With 12-hour retake feature, we allow multiple records per day
+            # but we check if student was marked in the last 5 minutes to prevent rapid duplicates
             today = date.today().isoformat()
+            from datetime import timedelta
+            five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+            
             existing_result = db.execute_query(
-                'SELECT * FROM attendance WHERE student_id = %s AND session_id = %s AND date = %s',
-                (student_id, session_id, today)
+                '''SELECT * FROM attendance 
+                   WHERE student_id = %s 
+                   AND session_id = %s 
+                   AND date = %s 
+                   AND timestamp > %s
+                   ORDER BY timestamp DESC
+                   LIMIT 1''',
+                (student_id, session_id, today, five_minutes_ago)
             )
             existing = existing_result[0] if existing_result else None
             
             if existing:
-                # UPDATE TIMESTAMP ONLY - DO NOT CREATE NEW ENTRY
-                print(f"⚠ Already marked: {student.get('name')} - Updating timestamp only")
+                # Student was marked in the last 5 minutes - prevent rapid duplicate
+                print(f"⚠ Already marked recently: {student.get('name')} - Updating timestamp only")
                 
                 db.execute_query(
                     'UPDATE attendance SET timestamp = %s, confidence = %s WHERE id = %s',
@@ -667,13 +678,27 @@ def end_session():
                 'message': 'You can only end your own sessions'
             }), 403
         
-        db.execute_query(
-            'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
-            (datetime.utcnow(), 'completed', data['session_id']),
-            fetch=False
-        )
+        # Check if this is a permanent end (semester end) or daily stop
+        end_type = data.get('end_type', 'semester')  # 'daily' or 'semester'
         
-        return jsonify({'message': 'Session ended successfully'}), 200
+        if end_type == 'daily':
+            # Stop camera for the day - can be reopened after 12 hours
+            db.execute_query(
+                'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
+                (datetime.utcnow(), 'stopped_daily', data['session_id']),
+                fetch=False
+            )
+            logger.info(f"Session {data['session_id']} stopped for the day")
+            return jsonify({'message': 'Session stopped for the day. Can be reopened after 12 hours.'}), 200
+        else:
+            # Permanent end for semester
+            db.execute_query(
+                'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
+                (datetime.utcnow(), 'ended_semester', data['session_id']),
+                fetch=False
+            )
+            logger.info(f"Session {data['session_id']} ended permanently")
+            return jsonify({'message': 'Session ended permanently for semester'}), 200
     
     except Exception as e:
         logger.error(f"Error ending session: {e}", exc_info=True)
@@ -683,11 +708,84 @@ def end_session():
         }), 500
 
 
+@attendance_bp.route('/reopen-session', methods=['POST'])
+@jwt_required()
+@role_required('instructor')
+def reopen_session():
+    """Reopen a session after 12 hours - keeps old attendance records"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if 'session_id' not in data:
+            return jsonify({'error': 'Session ID required'}), 400
+        
+        session_id = data['session_id']
+        db = get_db()
+        
+        # Get session info
+        session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (session_id,))
+        if not session_result:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        session = session_result[0]
+        
+        # Verify session belongs to this instructor
+        if str(session.get('instructor_id')) != str(user_id):
+            return jsonify({
+                'error': 'Unauthorized',
+                'message': 'You can only reopen your own sessions'
+            }), 403
+        
+        # Check if session can be reopened (must be stopped_daily and 12+ hours old)
+        if session.get('status') not in ['stopped_daily', 'completed']:
+            return jsonify({
+                'error': 'Cannot reopen',
+                'message': 'Only stopped sessions can be reopened'
+            }), 400
+        
+        # Check if 12 hours have passed
+        end_time = session.get('end_time')
+        if end_time:
+            from datetime import timedelta
+            hours_since_stop = (datetime.utcnow() - end_time).total_seconds() / 3600
+            
+            if hours_since_stop < 12:
+                return jsonify({
+                    'error': 'Too soon',
+                    'message': f'Session can be reopened after 12 hours. {12 - hours_since_stop:.1f} hours remaining.',
+                    'hours_remaining': 12 - hours_since_stop
+                }), 400
+        
+        # Reopen the session - old attendance records remain in database
+        db.execute_query(
+            'UPDATE sessions SET status = %s, end_time = NULL WHERE id = %s',
+            ('active', session_id),
+            fetch=False
+        )
+        
+        logger.info(f"Session {session_id} reopened after 12 hours. Old attendance records preserved.")
+        
+        return jsonify({
+            'message': 'Session reopened successfully. Previous attendance records are preserved.',
+            'session_id': str(session_id)
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error reopening session: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': 'Failed to reopen session',
+            'message': str(e)
+        }), 500
+
+
 @attendance_bp.route('/mark-absent', methods=['POST'])
 @jwt_required()
 @role_required('instructor')
 def mark_absent_students():
-    """Mark absent students when camera is stopped"""
+    """Mark absent students when camera is stopped - also stops session for the day"""
     try:
         user_id = get_jwt_identity()
         data = request.get_json()
@@ -724,11 +822,11 @@ def mark_absent_students():
                 'absent_count': 0
             }), 200
         
-        # Get students who are already marked present
+        # Get students who are already marked present TODAY
         today = date.today().isoformat()
         present_students_result = db.execute_query(
-            'SELECT DISTINCT student_id FROM attendance WHERE session_id = %s AND date = %s',
-            (session_id, today)
+            'SELECT DISTINCT student_id FROM attendance WHERE session_id = %s AND date = %s AND status = %s',
+            (session_id, today, 'present')
         )
         
         present_student_ids = [row['student_id'] for row in present_students_result] if present_students_result else []
@@ -756,7 +854,14 @@ def mark_absent_students():
                 absent_count += 1
                 logger.info(f"Marked {student_id} as absent for session {session_id}")
         
-        logger.info(f"Marked {absent_count} students as absent for session {session_id}")
+        # Stop session for the day (can be reopened after 12 hours)
+        db.execute_query(
+            'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
+            (datetime.utcnow(), 'stopped_daily', session_id),
+            fetch=False
+        )
+        
+        logger.info(f"Marked {absent_count} students as absent and stopped session {session_id} for the day")
         
         return jsonify({
             'message': f'Successfully marked {absent_count} students as absent',
@@ -843,7 +948,7 @@ def get_session_attendance(session_id):
 @jwt_required()
 @role_required('instructor', 'admin')
 def get_sessions():
-    """Get all sessions"""
+    """Get all sessions with reopen eligibility"""
     try:
         user_id = get_jwt_identity()
         db = get_db()
@@ -860,17 +965,35 @@ def get_sessions():
         else:
             sessions = db.execute_query('SELECT * FROM sessions ORDER BY start_time DESC')
         
+        from datetime import timedelta
         session_list = []
         for session in sessions:
+            # Check if session can be reopened (stopped for 12+ hours)
+            can_reopen = False
+            hours_until_reopen = None
+            
+            if session.get('status') in ['stopped_daily', 'completed'] and session.get('end_time'):
+                hours_since_stop = (datetime.utcnow() - session['end_time']).total_seconds() / 3600
+                if hours_since_stop >= 12:
+                    can_reopen = True
+                else:
+                    hours_until_reopen = 12 - hours_since_stop
+            
             session_list.append({
-                'id': str(session['id']),  # Use 'id' instead of '_id'
+                'id': str(session['id']),
                 'name': session.get('name', 'Unknown Session'),
                 'instructor_name': session.get('instructor_name', 'Unknown'),
-                'course': session.get('course_name', ''),  # Use 'course_name' from schema
+                'course': session.get('course_name', ''),
+                'section_id': session.get('section_id', ''),
+                'year': session.get('year', ''),
+                'session_type': session.get('session_type', ''),
+                'time_block': session.get('time_block', ''),
                 'start_time': session['start_time'].isoformat() if session.get('start_time') else None,
                 'end_time': session['end_time'].isoformat() if session.get('end_time') else None,
                 'status': session.get('status', 'unknown'),
-                'attendance_count': session.get('attendance_count', 0)
+                'attendance_count': session.get('attendance_count', 0),
+                'can_reopen': can_reopen,
+                'hours_until_reopen': hours_until_reopen
             })
         
         return jsonify(session_list), 200

@@ -25,29 +25,81 @@ def get_profile():
     if not student:
         return jsonify({'error': 'Student profile not found'}), 404
     
-    # Get courses and instructors for this student
-    instructor_query = "SELECT DISTINCT u.id, u.name, u.course_name, u.sections, u.class_year FROM users u WHERE u.role = 'instructor' AND u.class_year = %s"
-    instructors_result = db.execute_query(instructor_query, (student.get('year', ''),))
-    
-    courses = []
-    instructors = []
     student_section = student.get('section', 'A')
+    student_year = student.get('year', '')
+    
+    # Normalize year format (handle "4th Year" vs "4")
+    year_normalized = student_year.replace('th Year', '').replace('st Year', '').replace('nd Year', '').replace('rd Year', '').strip()
+    
+    # Get all courses from attendance records for this student
+    courses_query = """
+        SELECT DISTINCT course_name 
+        FROM attendance 
+        WHERE student_id = %s AND course_name IS NOT NULL AND course_name != ''
+        ORDER BY course_name
+    """
+    courses_result = db.execute_query(courses_query, (student['student_id'],))
+    courses_from_attendance = [c['course_name'] for c in courses_result] if courses_result else []
+    
+    # Get courses from sessions for this student's year and section
+    sessions_query = """
+        SELECT DISTINCT course_name 
+        FROM sessions 
+        WHERE (year = %s OR year = %s) AND section_id = %s AND course_name IS NOT NULL AND course_name != ''
+        ORDER BY course_name
+    """
+    print(f"DEBUG: Querying sessions with year='{student_year}' or '{year_normalized}', section='{student_section}'")
+    sessions_result = db.execute_query(sessions_query, (student_year, year_normalized, student_section))
+    courses_from_sessions = [s['course_name'] for s in sessions_result] if sessions_result else []
+    print(f"DEBUG: Found {len(courses_from_sessions)} courses from sessions: {courses_from_sessions}")
+    
+    # Get instructors who teach this student's year
+    instructor_query = """
+        SELECT DISTINCT u.id, u.name, u.course_name, u.sections, u.class_year 
+        FROM users u 
+        WHERE u.role = 'instructor' AND (u.class_year = %s OR u.class_year = %s)
+    """
+    instructors_result = db.execute_query(instructor_query, (student_year, year_normalized))
+    
+    courses_from_instructors = []
+    instructors = []
     
     if instructors_result:
         for instructor in instructors_result:
-            # Check if instructor teaches this student's section
-            sections_json = instructor.get('sections', '[]')
-            try:
-                sections = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
-                if student_section in sections:
-                    courses.append(instructor.get('course_name', 'N/A'))
+            course_name = instructor.get('course_name', '')
+            if course_name:
+                # Check if instructor teaches this student's section
+                sections_json = instructor.get('sections', None)
+                if sections_json:
+                    try:
+                        sections = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
+                        if student_section in sections:
+                            courses_from_instructors.append(course_name)
+                            instructors.append({
+                                'id': instructor['id'],
+                                'name': instructor['name'],
+                                'course': course_name
+                            })
+                    except:
+                        # If sections parsing fails, still add the instructor
+                        courses_from_instructors.append(course_name)
+                        instructors.append({
+                            'id': instructor['id'],
+                            'name': instructor['name'],
+                            'course': course_name
+                        })
+                else:
+                    # If no sections specified, assume instructor teaches all sections
+                    courses_from_instructors.append(course_name)
                     instructors.append({
                         'id': instructor['id'],
                         'name': instructor['name'],
-                        'course': instructor.get('course_name', 'N/A')
+                        'course': course_name
                     })
-            except:
-                pass
+    
+    # Combine courses from all sources and remove duplicates
+    all_courses = list(set(courses_from_attendance + courses_from_sessions + courses_from_instructors))
+    all_courses.sort()
     
     profile = {
         'id': str(student.get('id', student.get('_id', ''))),
@@ -55,10 +107,10 @@ def get_profile():
         'name': student['name'],
         'email': student['email'],
         'department': student.get('department', ''),
-        'year': student.get('year', ''),
-        'section': student.get('section', ''),
+        'year': student_year,
+        'section': student_section,
         'face_registered': student.get('face_registered', False),
-        'courses': list(set(courses)),
+        'courses': all_courses,
         'instructors': instructors
     }
     
@@ -115,7 +167,7 @@ def register_face():
 @jwt_required()
 @role_required('student')
 def get_attendance():
-    """Get student's attendance history"""
+    """Get student's attendance history with optional filters"""
     user_id = get_jwt_identity()
     db = get_db()
     
@@ -125,14 +177,39 @@ def get_attendance():
     if not student:
         return jsonify({'error': 'Student profile not found'}), 404
     
+    # Get filter parameters
+    course_filter = request.args.get('course', None)
+    instructor_filter = request.args.get('instructor', None)
+    
+    # Build query with filters
+    query = 'SELECT * FROM attendance WHERE student_id = %s'
+    params = [student['student_id']]
+    
+    if course_filter:
+        query += ' AND course_name = %s'
+        params.append(course_filter)
+    
+    if instructor_filter:
+        query += ' AND instructor_id = %s'
+        params.append(instructor_filter)
+    
+    query += ' ORDER BY timestamp DESC'
+    
     # Get attendance records
-    attendance_records = db.execute_query('SELECT * FROM attendance WHERE student_id = %s ORDER BY timestamp DESC', (student['student_id'],))
+    attendance_records = db.execute_query(query, tuple(params))
     
     records = []
     for record in attendance_records:
         # Get session info
         session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (record.get('session_id'),)) if record.get('session_id') else []
         session = session_result[0] if session_result else None
+        
+        # Get instructor info
+        instructor_name = 'N/A'
+        if record.get('instructor_id'):
+            instructor_result = db.execute_query('SELECT name FROM users WHERE id = %s', (record.get('instructor_id'),))
+            if instructor_result:
+                instructor_name = instructor_result[0]['name']
         
         records.append({
             'id': str(record.get('id', record.get('_id', ''))),
@@ -141,6 +218,8 @@ def get_attendance():
             'session_name': session.get('name', 'N/A') if session else 'N/A',
             'session_type': record.get('session_type', 'lab'),
             'course_name': record.get('course_name', 'N/A'),
+            'instructor_id': record.get('instructor_id'),
+            'instructor_name': instructor_name,
             'confidence': record.get('confidence', 0),
             'status': record.get('status', 'present')
         })

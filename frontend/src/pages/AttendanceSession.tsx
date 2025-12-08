@@ -69,11 +69,18 @@ export default function AttendanceSession() {
   const handleStopCamera = async () => {
     if (!sessionId) return;
     
+    if (!confirm('Stop camera and mark absent students? This will end the session for today (can be reopened after 12 hours).')) {
+      return;
+    }
+    
     try {
       const response = await attendanceAPI.markAbsent(sessionId);
       const data = response.data;
-      toast.success(`✓ Camera stopped. Marked ${data.absent_count} students as absent`);
+      toast.success(`✓ Camera stopped. Marked ${data.absent_count} students as absent. Session can be reopened after 12 hours.`);
       loadSessionData(); // Refresh attendance list to show absent students
+      
+      // Navigate back to dashboard after stopping
+      setTimeout(() => navigate('/instructor'), 2000);
     } catch (error: any) {
       toast.error(error.response?.data?.message || 'Failed to mark absent students');
     }
@@ -82,9 +89,13 @@ export default function AttendanceSession() {
   const handleEndSession = async () => {
     if (!sessionId) return;
     
+    if (!confirm('End this session permanently for the semester? This cannot be undone.')) {
+      return;
+    }
+    
     try {
-      await attendanceAPI.endSession(sessionId);
-      toast.success('Session ended');
+      await attendanceAPI.endSession(sessionId, 'semester');
+      toast.success('Session ended permanently for semester');
       navigate('/instructor');
     } catch (error) {
       toast.error('Failed to end session');

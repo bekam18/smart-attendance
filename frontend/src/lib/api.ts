@@ -179,11 +179,14 @@ export const attendanceAPI = {
   startSession: (data: any) =>
     api.post('/api/attendance/start-session', data),
   
-  endSession: (sessionId: string) =>
-    api.post('/api/attendance/end-session', { session_id: sessionId }),
+  endSession: (sessionId: string, endType: 'daily' | 'semester' = 'semester') =>
+    api.post('/api/attendance/end-session', { session_id: sessionId, end_type: endType }),
   
   markAbsent: (sessionId: string) =>
     api.post('/api/attendance/mark-absent', { session_id: sessionId }),
+  
+  reopenSession: (sessionId: string) =>
+    api.post('/api/attendance/reopen-session', { session_id: sessionId }),
   
   recognize: async (image: Blob | string, sessionId: string) => {
     console.log('🔍 Sending recognition request...');
