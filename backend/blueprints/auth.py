@@ -4,26 +4,39 @@ from datetime import datetime
 
 from db.mysql import get_db
 from utils.security import hash_password, verify_password
+# from utils.secure_db import get_secure_db
+from middleware.simple_security import (
+    validate_request_security,
+    validate_json_fields,
+    audit_log_simple,
+    validate_username_format,
+    validate_email_format
+)
 
 auth_bp = Blueprint('auth', __name__)
 
 @auth_bp.route('/login', methods=['POST'])
+@validate_request_security
+@validate_json_fields(required_fields=['username', 'password'])
+@audit_log_simple('LOGIN_ATTEMPT')
 def login():
     """Login endpoint for all user roles"""
-    data = request.get_json()
-    
-    # Debug logging
-    print(f"🔍 Login attempt - Received data: {data}")
+    # Get validated and sanitized data from middleware
+    data = getattr(request, 'validated_data', None) or request.get_json()
     
     if not data or 'username' not in data or 'password' not in data:
-        print("❌ Missing username or password in request")
         return jsonify({'error': 'Username and password required'}), 400
     
+    # Get credentials
     username = data['username']
     password = data['password']
     
+    # Debug logging
+    print(f"🔍 Login attempt - Username: {username}")
+    
     print(f"🔍 Looking for user: {username}")
     
+    # Use regular database
     db = get_db()
     result = db.execute_query("SELECT * FROM users WHERE username = %s", (username,))
     user = result[0] if result else None
@@ -63,6 +76,7 @@ def login():
     
     # If student, get student_id
     if user['role'] == 'student':
+        db = get_db()
         student_result = db.execute_query("SELECT student_id FROM students WHERE user_id = %s", (user['id'],))
         if student_result:
             user_info['student_id'] = student_result[0]['student_id']
@@ -73,13 +87,19 @@ def login():
     }), 200
 
 @auth_bp.route('/register-student', methods=['POST'])
+@validate_request_security
+@validate_json_fields(required_fields=['username', 'password', 'email', 'name', 'student_id'])
+@audit_log_simple('STUDENT_REGISTRATION')
 def register_student():
     """Register a new student (can be called by admin or self-registration)"""
-    data = request.get_json()
+    data = getattr(request, 'validated_data', None) or request.get_json()
     
-    required_fields = ['username', 'password', 'email', 'name', 'student_id']
-    if not all(field in data for field in required_fields):
-        return jsonify({'error': 'Missing required fields'}), 400
+    # Additional format validation
+    if not validate_username_format(data['username']):
+        return jsonify({'error': 'Invalid username format'}), 400
+    
+    if not validate_email_format(data['email']):
+        return jsonify({'error': 'Invalid email format'}), 400
     
     db = get_db()
     
@@ -158,10 +178,13 @@ from utils.email_service import email_service
 reset_tokens = {}
 
 @auth_bp.route('/forgot-password', methods=['POST'])
+@validate_request_security
+@validate_json_fields(required_fields=['email'])
+@audit_log_simple('PASSWORD_RESET_REQUEST')
 def forgot_password():
     """Request password reset - sends email with reset token"""
     try:
-        data = request.get_json()
+        data = getattr(request, 'validated_data', None) or request.get_json()
         email = data.get('email', '').strip()
         
         if not email:
@@ -214,10 +237,13 @@ def forgot_password():
 
 
 @auth_bp.route('/reset-password', methods=['POST'])
+@validate_request_security
+@validate_json_fields(required_fields=['token', 'password'])
+@audit_log_simple('PASSWORD_RESET')
 def reset_password():
     """Reset password using token"""
     try:
-        data = request.get_json()
+        data = getattr(request, 'validated_data', None) or request.get_json()
         token = data.get('token', '').strip()
         new_password = data.get('password', '').strip()
         
@@ -263,10 +289,13 @@ def reset_password():
 
 
 @auth_bp.route('/verify-reset-token', methods=['POST'])
+@validate_request_security
+@validate_json_fields(required_fields=['token'])
+@audit_log_simple('TOKEN_VERIFICATION')
 def verify_reset_token():
     """Verify if a reset token is valid"""
     try:
-        data = request.get_json()
+        data = getattr(request, 'validated_data', None) or request.get_json()
         token = data.get('token', '').strip()
         
         if not token:

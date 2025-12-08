@@ -13,7 +13,7 @@ class MySQLConnection:
     def init_pool(self):
         """Initialize MySQL connection pool"""
         try:
-            from config import config
+            from config import Config as config
             
             self.pool = pooling.MySQLConnectionPool(
                 pool_name="smartattendance_pool",

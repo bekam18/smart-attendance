@@ -2,8 +2,9 @@ from flask import Flask, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 import os
+import logging
 
-from config import config
+from config import Config as config
 # from db.mongo import init_db  # Replaced with MySQL
 from db.mysql import init_db
 from blueprints.auth import auth_bp
@@ -12,6 +13,14 @@ from blueprints.students import students_bp
 from blueprints.attendance import attendance_bp
 from blueprints.debug import debug_bp
 from blueprints.instructor import instructor_bp
+
+# Import security middleware
+# try:
+#     from middleware.simple_security import validate_request_security
+#     SECURITY_AVAILABLE = True
+# except ImportError:
+#     SECURITY_AVAILABLE = False
+#     print("⚠️  Security middleware not available")
 
 def create_app():
     app = Flask(__name__)
@@ -23,9 +32,23 @@ def create_app():
     app.config['MAX_CONTENT_LENGTH'] = config.MAX_CONTENT_LENGTH
     
     # Enable detailed error logging
-    import logging
-    logging.basicConfig(level=logging.DEBUG)
-    app.logger.setLevel(logging.DEBUG)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    app.logger.setLevel(logging.INFO)
+    
+    # Security logging
+    security_logger = logging.getLogger('security')
+    security_handler = logging.FileHandler('logs/security.log')
+    security_handler.setFormatter(logging.Formatter(
+        '%(asctime)s - SECURITY - %(levelname)s - %(message)s'
+    ))
+    security_logger.addHandler(security_handler)
+    security_logger.setLevel(logging.WARNING)
+    
+    # Create logs directory
+    os.makedirs('logs', exist_ok=True)
     
     # CORS - Allow frontend to access API with automatic OPTIONS handling
     # automatic_options=True ensures Flask-CORS handles OPTIONS requests
@@ -45,6 +68,15 @@ def create_app():
     
     # JWT
     jwt = JWTManager(app)
+    
+    # Security headers
+    @app.after_request
+    def after_request(response):
+        # Add basic security headers
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['X-XSS-Protection'] = '1; mode=block'
+        return response
     
     # Add error handlers for better debugging
     @app.errorhandler(Exception)
@@ -92,26 +124,26 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     
-    # Load model on startup
-    print("\n" + "="*60)
-    print("LOADING FACE RECOGNITION MODEL")
-    print("="*60)
-    try:
-        from recognizer.loader import model_loader
-        success = model_loader.load_models()
-        if success:
-            print("✅ Model loaded successfully")
-            metadata = model_loader.get_metadata()
-            if metadata:
-                print(f"   Students: {metadata.get('num_classes', 0)}")
-                print(f"   Threshold: {metadata.get('threshold', 0):.4f}")
-        else:
-            print("❌ Model loading failed - recognition will not work")
-    except Exception as e:
-        print(f"❌ Error loading model: {e}")
-        import traceback
-        traceback.print_exc()
-    print("="*60 + "\n")
+    # Load model on startup (temporarily disabled)
+    # print("\n" + "="*60)
+    # print("LOADING FACE RECOGNITION MODEL")
+    # print("="*60)
+    # try:
+    #     from recognizer.loader import model_loader
+    #     success = model_loader.load_models()
+    #     if success:
+    #         print("✅ Model loaded successfully")
+    #         metadata = model_loader.get_metadata()
+    #         if metadata:
+    #             print(f"   Students: {metadata.get('num_classes', 0)}")
+    #             print(f"   Threshold: {metadata.get('threshold', 0):.4f}")
+    #     else:
+    #         print("❌ Model loading failed - recognition will not work")
+    # except Exception as e:
+    #     print(f"❌ Error loading model: {e}")
+    #     import traceback
+    #     traceback.print_exc()
+    # print("="*60 + "\n")
     
     print(f"🚀 SmartAttendance API running on http://{config.HOST}:{config.PORT}")
     app.run(host=config.HOST, port=config.PORT, debug=config.DEBUG)
