@@ -408,45 +408,54 @@ def recognize_face():
             
             # Check if already marked present in this session TODAY
             # Note: With 12-hour retake feature, we allow multiple records per day
-            # but we check if student was marked in the last 5 minutes to prevent rapid duplicates
+            # but we check if student was marked in the last 12 HOURS to prevent duplicates
+            # within the same session instance (before it's stopped and reopened)
             today = date.today().isoformat()
             from datetime import timedelta
-            five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
             
+            # Check for ANY existing record today for this session
             existing_result = db.execute_query(
                 '''SELECT * FROM attendance 
                    WHERE student_id = %s 
                    AND session_id = %s 
                    AND date = %s 
-                   AND timestamp > %s
+                   AND status = 'present'
                    ORDER BY timestamp DESC
                    LIMIT 1''',
-                (student_id, session_id, today, five_minutes_ago)
+                (student_id, session_id, today)
             )
             existing = existing_result[0] if existing_result else None
             
             if existing:
-                # Student was marked in the last 5 minutes - prevent rapid duplicate
-                print(f"⚠ Already marked recently: {student.get('name')} - Updating timestamp only")
-                
-                db.execute_query(
-                    'UPDATE attendance SET timestamp = %s, confidence = %s WHERE id = %s',
-                    (datetime.utcnow(), confidence, existing['id']),
-                    fetch=False
-                )
-                
-                print(f"✓ Timestamp updated for: {student.get('name')}")
-                print("="*80 + "\n")
-                sys.stdout.flush()
-                
-                return jsonify({
-                    'status': 'already_marked',
-                    'message': f'{student.get("name")} already marked present (timestamp updated)',
-                    'student_id': student_id,
-                    'student_name': student.get('name'),
-                    'confidence': confidence,
-                    'updated': True
-                }), 200
+                # Check if session has been stopped and reopened since this record
+                # If session is still active and record exists, just update timestamp
+                if session.get('status') == 'active':
+                    # Student already marked in this active session - update timestamp only
+                    print(f"⚠ Already marked in active session: {student.get('name')} - Updating timestamp only")
+                    
+                    db.execute_query(
+                        'UPDATE attendance SET timestamp = %s, confidence = %s WHERE id = %s',
+                        (datetime.utcnow(), confidence, existing['id']),
+                        fetch=False
+                    )
+                    
+                    print(f"✓ Timestamp updated for: {student.get('name')}")
+                    print("="*80 + "\n")
+                    sys.stdout.flush()
+                    
+                    return jsonify({
+                        'status': 'already_marked',
+                        'message': f'{student.get("name")} already marked present (timestamp updated)',
+                        'student_id': student_id,
+                        'student_name': student.get('name'),
+                        'confidence': confidence,
+                        'updated': True
+                    }), 200
+                else:
+                    # Session was stopped and reopened - allow new record
+                    print(f"✓ Session was reopened - allowing new attendance record for: {student.get('name')}")
+            else:
+                print(f"✓ No existing record found - creating new attendance record")
             
             # Record NEW attendance entry with instructor_id, section_id, session_type, and time_block
             attendance_doc = {

@@ -23,7 +23,7 @@ interface FaceData {
   confidence?: number;
 }
 
-export default function CameraPreview({ onCapture, autoCapture = false, captureInterval = 2000 }: CameraPreviewProps) {
+export default function CameraPreview({ onCapture, autoCapture = false, captureInterval = 4000 }: CameraPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -37,9 +37,18 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
   const smoothedBoxRef = useRef<FaceBox | null>(null);
   const lastFaceDataRef = useRef<FaceData | null>(null);
   const isActiveRef = useRef<boolean>(false);
+  const lastDetectionTime = useRef<number>(0);
+  const isProcessing = useRef<boolean>(false);
 
   const detectFacesFromBackend = async () => {
-    if (!videoRef.current || !canvasRef.current) return;
+    if (!videoRef.current || !canvasRef.current || !isActiveRef.current || isProcessing.current) return;
+    
+    // Skip if we just processed recently (avoid overwhelming the backend)
+    const now = Date.now();
+    if (now - lastDetectionTime.current < 3000) return; // Minimum 3 seconds between detections
+    
+    isProcessing.current = true;
+    lastDetectionTime.current = now;
     
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -48,14 +57,17 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
     if (!context || video.readyState !== 4) return;
     
     try {
-      // Capture current frame
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      context.drawImage(video, 0, 0);
+      // Reduce resolution for faster processing
+      const targetWidth = 640;
+      const targetHeight = 480;
       
-      // Convert to blob
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      context.drawImage(video, 0, 0, targetWidth, targetHeight);
+      
+      // Convert to blob with lower quality for speed
       const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob(resolve, 'image/jpeg', 0.8);
+        canvas.toBlob(resolve, 'image/jpeg', 0.6);
       });
       
       if (!blob) {
@@ -67,25 +79,32 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
       const formData = new FormData();
       formData.append('image', blob);
       
-      console.log('Sending face detection request...');
       const response = await api.post('/api/attendance/detect-face', formData, {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 5000 // 5 second timeout
       });
       
       const data = response.data;
-      console.log('Face detection response:', data);
       
       if (data.status === 'success' && data.faces && data.faces.length > 0) {
-        // Use the first detected face
+        // Scale bbox back to video dimensions
         const faceData: FaceData = data.faces[0];
-        console.log('✅ Face detected at:', JSON.stringify(faceData.bbox));
-        lastFaceBoxRef.current = faceData.bbox;
-        lastFaceDataRef.current = faceData;
+        const scaleX = video.videoWidth / targetWidth;
+        const scaleY = video.videoHeight / targetHeight;
+        
+        const scaledBbox = {
+          x: faceData.bbox.x * scaleX,
+          y: faceData.bbox.y * scaleY,
+          w: faceData.bbox.w * scaleX,
+          h: faceData.bbox.h * scaleY
+        };
+        
+        lastFaceBoxRef.current = scaledBbox;
+        lastFaceDataRef.current = { ...faceData, bbox: scaledBbox };
         setFaceDetected(true);
       } else {
-        console.log('⚠️ No face detected');
         lastFaceBoxRef.current = null;
         lastFaceDataRef.current = null;
         setFaceDetected(false);
@@ -93,6 +112,8 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
     } catch (error) {
       console.error('Face detection error:', error);
       // Don't show error toast for detection failures (too noisy)
+    } finally {
+      isProcessing.current = false;
     }
   };
 

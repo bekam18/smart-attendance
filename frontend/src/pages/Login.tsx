@@ -58,7 +58,7 @@ export default function Login() {
                 <Scan className="w-8 h-8 text-white" />
               </div>
               <h1 className="text-2xl font-bold text-gray-800 mb-1">
-                SmartAttendance
+                SmartAttendance Using Face Recognition
               </h1>
               <p className="text-sm text-gray-500">Secure Access Portal</p>
             </div>
@@ -144,8 +144,8 @@ export default function Login() {
                 <Phone className="w-6 h-6 text-white" />
               </div>
               <p className="font-semibold text-gray-800 text-sm mb-1">Phone</p>
-              <p className="text-xs text-gray-600">+251 912758603</p>
-              <p className="text-xs text-gray-600">+251 977381983</p>
+              <p className="text-xs text-gray-600">+251 918079603</p>
+              <p className="text-xs text-gray-600">+251 974791353</p>
             </div>
 
             {/* Email */}

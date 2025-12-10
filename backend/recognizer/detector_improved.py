@@ -52,8 +52,8 @@ class ImprovedFaceDetector:
                 # Very low threshold for maximum side face detection
                 self.detector.prepare(
                     ctx_id=-1, 
-                    det_size=(640, 640),
-                    det_thresh=0.2  # Very low threshold for side faces
+                    det_size=(320, 320),  # Reduced for faster processing
+                    det_thresh=0.3  # Slightly higher threshold for speed
                 )
                 
                 # Update minimum confidence for filtering
@@ -61,8 +61,9 @@ class ImprovedFaceDetector:
                 
                 print("✅ Improved InsightFace detector initialized")
                 print("   Model: buffalo_l")
-                print("   Detection size: 640x640")
-                print("   Threshold: 0.2 (maximum sensitivity for side faces)")
+                print("   Detection size: 320x320 (optimized for speed)")
+                print("   Threshold: 0.3 (balanced speed and accuracy)")
+                print("   Status: Ready for high-performance face detection")
                 
             elif self.method == 'opencv':
                 # Use DNN-based face detector (much better than Haar Cascade)
@@ -211,8 +212,8 @@ class ImprovedFaceDetector:
                     # Get confidence score
                     confidence = float(face.det_score)
                     
-                    # Filter by confidence (extremely low threshold for side faces)
-                    if confidence < 0.15:  # Extremely low threshold to catch side faces
+                    # Filter by confidence (balanced threshold for speed)
+                    if confidence < 0.3:  # Higher threshold for better performance
                         continue
                     
                     # Expand bbox slightly

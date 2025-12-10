@@ -17,7 +17,7 @@ class InsightFaceDetector:
     Provides better detection + 5-point landmark alignment
     """
     
-    def __init__(self, det_size=(640, 640)):
+    def __init__(self, det_size=(320, 320)):
         """
         Initialize InsightFace detector
         
@@ -250,4 +250,4 @@ class InsightFaceDetector:
 
 
 # Global detector instance
-face_detector = InsightFaceDetector(det_size=(640, 640))
+face_detector = InsightFaceDetector(det_size=(320, 320))

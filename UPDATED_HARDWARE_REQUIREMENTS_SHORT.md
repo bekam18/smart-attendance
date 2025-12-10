@@ -1,0 +1,3 @@
+# 1.6.3.1 Hardware Requirements
+
+The system requires a computer with adequate processing power, RAM, and storage for model training and real-time facial recognition. Essential components include a 720p or higher webcam for clear image capture and stable internet connection for dependency installation and updates. For resource-limited environments, cloud-based solutions or high-performance workstations are recommended.

@@ -234,4 +234,4 @@ class FaceDetector:
 # Global detector instance
 # Use 'insightface' for better accuracy (requires C++ build tools on Windows)
 # Use 'opencv' for simpler installation (works out of the box)
-face_detector = FaceDetector(method='opencv')  # Change to 'insightface' when installed
+face_detector = FaceDetector(method='insightface')  # InsightFace is now installed and working
