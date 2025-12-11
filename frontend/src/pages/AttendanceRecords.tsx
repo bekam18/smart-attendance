@@ -54,7 +54,9 @@ export default function AttendanceRecords() {
       
       setRecords(recordsRes.data);
       setStudents(studentsRes.data);
-      setSessions(sessionsRes.data);
+      // Handle both old format (array) and new format (object with sessions array)
+      const sessionsList = sessionsRes.data.sessions || sessionsRes.data || [];
+      setSessions(sessionsList);
     } catch (error) {
       toast.error('Failed to load data');
       console.error(error);

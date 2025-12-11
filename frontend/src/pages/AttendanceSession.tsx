@@ -13,6 +13,7 @@ export default function AttendanceSession() {
   const [attendance, setAttendance] = useState<any[]>([]);
   const [lastResult, setLastResult] = useState<any>(null);
   const [processing, setProcessing] = useState(false);
+  const [lastRecognitionTime, setLastRecognitionTime] = useState(0);
 
   useEffect(() => {
     if (sessionId) {
@@ -33,7 +34,15 @@ export default function AttendanceSession() {
   const handleCapture = async (blob: Blob) => {
     if (processing || !sessionId) return;
     
+    // Rate limiting: prevent multiple recognitions within 3 seconds
+    const now = Date.now();
+    if (now - lastRecognitionTime < 3000) {
+      console.log('Recognition rate limited - too soon since last attempt');
+      return;
+    }
+    
     setProcessing(true);
+    setLastRecognitionTime(now);
     
     try {
       const response = await attendanceAPI.recognize(blob, sessionId);

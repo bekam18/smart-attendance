@@ -35,7 +35,9 @@ export default function InstructorDashboard() {
   const loadSessions = async () => {
     try {
       const response = await attendanceAPI.getSessions();
-      setSessions(response.data);
+      // Handle both old format (array) and new format (object with sessions array)
+      const sessionsList = response.data.sessions || response.data || [];
+      setSessions(sessionsList);
     } catch (error) {
       toast.error('Failed to load sessions');
     }
@@ -109,6 +111,20 @@ export default function InstructorDashboard() {
       loadSessions();
     } catch (error: any) {
       toast.error(error.response?.data?.message || 'Failed to reopen session');
+    }
+  };
+
+  const handleForceReopenSession = async (sessionId: string) => {
+    if (!confirm('Force reopen this session immediately? This bypasses the 12-hour waiting period. Use only if you accidentally stopped the session.')) {
+      return;
+    }
+    
+    try {
+      await attendanceAPI.forceReopenSession(sessionId);
+      toast.success('Session force reopened successfully');
+      loadSessions();
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || 'Failed to force reopen session');
     }
   };
 
@@ -469,6 +485,13 @@ export default function InstructorDashboard() {
                         title={`Can reopen in ${session.hours_until_reopen.toFixed(1)} hours`}
                       >
                         ⏳ Reopen in {session.hours_until_reopen.toFixed(1)}h
+                      </button>
+                      <button
+                        onClick={() => handleForceReopenSession(session.id)}
+                        className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm"
+                        title="Force reopen immediately (use if accidentally stopped)"
+                      >
+                        🚨Reopen
                       </button>
                       <button
                         onClick={() => navigate(`/instructor/session/${session.id}`)}

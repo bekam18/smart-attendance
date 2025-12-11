@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 import os
@@ -96,6 +96,13 @@ def create_app():
     # Create upload folder
     os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(config.MODEL_PATH, exist_ok=True)
+    
+    # Request logging (disabled in production)
+    # @app.before_request
+    # def log_request():
+    #     print(f"🌐 REQUEST: {request.method} {request.path}")
+    #     if request.is_json:
+    #         print(f"   JSON: {request.get_json()}")
     
     # Register blueprints
     app.register_blueprint(auth_bp, url_prefix='/api/auth')

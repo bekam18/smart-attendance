@@ -155,6 +155,13 @@ export const adminAPI = {
   
   updateStudent: (studentId: string, data: any) =>
     api.put(`/api/admin/student/${studentId}`, data),
+  
+  // Session Management
+  getAllSessions: () =>
+    api.get('/api/attendance/sessions'),
+  
+  adminReopenSession: (sessionId: number) =>
+    api.post('/api/attendance/admin-reopen-session', { session_id: sessionId }),
 };
 
 // Student API
@@ -187,6 +194,9 @@ export const attendanceAPI = {
   
   reopenSession: (sessionId: string) =>
     api.post('/api/attendance/reopen-session', { session_id: sessionId }),
+  
+  forceReopenSession: (sessionId: string) =>
+    api.post('/api/attendance/reopen-session', { session_id: sessionId, force: true }),
   
   recognize: async (image: Blob | string, sessionId: string) => {
     console.log('🔍 Sending recognition request...');

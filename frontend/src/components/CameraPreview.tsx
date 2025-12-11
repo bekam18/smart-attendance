@@ -45,7 +45,7 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
     
     // Skip if we just processed recently (avoid overwhelming the backend)
     const now = Date.now();
-    if (now - lastDetectionTime.current < 3000) return; // Minimum 3 seconds between detections
+    if (now - lastDetectionTime.current < 4000) return; // Minimum 4 seconds between detections
     
     isProcessing.current = true;
     lastDetectionTime.current = now;
@@ -284,16 +284,16 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
           console.log('🚀 Starting animation loop...');
           animationFrameRef.current = requestAnimationFrame(updateOverlay);
           
-          // Start backend face detection (every 500ms)
+          // Start backend face detection (every 4 seconds to prevent duplicates)
           setTimeout(() => {
             console.log('🚀 Starting detection interval...');
             detectionIntervalRef.current = setInterval(() => {
               detectFacesFromBackend();
-            }, 500);
+            }, 4000);  // Increased from 500ms to 4000ms
             
-            // Trigger first detection immediately
-            detectFacesFromBackend();
-          }, 500);
+            // Trigger first detection after 2 seconds
+            setTimeout(() => detectFacesFromBackend(), 2000);
+          }, 1000);
         };
       }
       

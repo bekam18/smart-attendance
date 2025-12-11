@@ -5,7 +5,7 @@ Handles base64 images, file uploads, and all error scenarios gracefully
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import logging
 import traceback
 import sys
@@ -406,58 +406,103 @@ def recognize_face():
             
             print(f"✓ Section/Year validated: {student_section}, {student_year}")
             
-            # Check if already marked present in this session TODAY
-            # Note: With 12-hour retake feature, we allow multiple records per day
-            # but we check if student was marked in the last 12 HOURS to prevent duplicates
-            # within the same session instance (before it's stopped and reopened)
-            today = date.today().isoformat()
-            from datetime import timedelta
+            # ============================================================
+            # ULTRA-STRICT DUPLICATE PREVENTION FOR SINGLE SESSION
+            # ============================================================
+            # Check for ANY existing attendance record in this session (present OR absent)
+            # This ensures ONE attendance record per student per session, period.
             
-            # Check for ANY existing record today for this session
             existing_result = db.execute_query(
                 '''SELECT * FROM attendance 
                    WHERE student_id = %s 
                    AND session_id = %s 
-                   AND date = %s 
-                   AND status = 'present'
                    ORDER BY timestamp DESC
                    LIMIT 1''',
-                (student_id, session_id, today)
+                (student_id, session_id)
             )
             existing = existing_result[0] if existing_result else None
             
             if existing:
-                # Check if session has been stopped and reopened since this record
-                # If session is still active and record exists, just update timestamp
-                if session.get('status') == 'active':
-                    # Student already marked in this active session - update timestamp only
-                    print(f"⚠ Already marked in active session: {student.get('name')} - Updating timestamp only")
-                    
+                # Student already has a record in this session
+                existing_time = existing.get('timestamp')
+                existing_status = existing.get('status')
+                existing_confidence = existing.get('confidence', 0)
+                time_diff = datetime.utcnow() - existing_time if existing_time else timedelta(0)
+                
+                print(f"🚫 DUPLICATE BLOCKED: {student.get('name')} already has attendance in session {session_id}")
+                print(f"   Existing: {existing_status} at {existing_time} (confidence: {existing_confidence:.1f}%)")
+                print(f"   New attempt: present at {datetime.utcnow()} (confidence: {confidence:.1f}%)")
+                print(f"   Time difference: {time_diff.total_seconds():.1f} seconds")
+                
+                # If existing record is 'absent' and new is 'present' with higher confidence, update to present
+                if existing_status == 'absent' and confidence > 50:
+                    new_confidence = max(confidence, existing_confidence)
                     db.execute_query(
-                        'UPDATE attendance SET timestamp = %s, confidence = %s WHERE id = %s',
-                        (datetime.utcnow(), confidence, existing['id']),
+                        'UPDATE attendance SET status = %s, confidence = %s, timestamp = %s WHERE id = %s',
+                        ('present', new_confidence, datetime.utcnow(), existing['id']),
                         fetch=False
                     )
                     
-                    print(f"✓ Timestamp updated for: {student.get('name')}")
-                    print("="*80 + "\n")
-                    sys.stdout.flush()
+                    print(f"✓ Updated absent → present: confidence {existing_confidence:.1f}% → {new_confidence:.1f}%")
                     
                     return jsonify({
-                        'status': 'already_marked',
-                        'message': f'{student.get("name")} already marked present (timestamp updated)',
+                        'status': 'updated_to_present',
+                        'message': f'{student.get("name")} updated from absent to present',
                         'student_id': student_id,
                         'student_name': student.get('name'),
-                        'confidence': confidence,
-                        'updated': True
+                        'confidence': new_confidence,
+                        'previous_status': existing_status,
+                        'action': 'absent_to_present'
                     }), 200
-                else:
-                    # Session was stopped and reopened - allow new record
-                    print(f"✓ Session was reopened - allowing new attendance record for: {student.get('name')}")
-            else:
-                print(f"✓ No existing record found - creating new attendance record")
+                
+                # If existing record is 'present', just update confidence if higher
+                elif existing_status == 'present':
+                    if confidence > existing_confidence:
+                        db.execute_query(
+                            'UPDATE attendance SET confidence = %s, timestamp = %s WHERE id = %s',
+                            (confidence, datetime.utcnow(), existing['id']),
+                            fetch=False
+                        )
+                        
+                        print(f"✓ Updated confidence: {existing_confidence:.1f}% → {confidence:.1f}%")
+                        
+                        return jsonify({
+                            'status': 'confidence_updated',
+                            'message': f'{student.get("name")} confidence updated (already present)',
+                            'student_id': student_id,
+                            'student_name': student.get('name'),
+                            'confidence': confidence,
+                            'previous_confidence': existing_confidence,
+                            'action': 'confidence_improved'
+                        }), 200
+                    else:
+                        print(f"✓ No update needed: existing confidence {existing_confidence:.1f}% >= new {confidence:.1f}%")
+                        
+                        return jsonify({
+                            'status': 'already_present',
+                            'message': f'{student.get("name")} already marked present',
+                            'student_id': student_id,
+                            'student_name': student.get('name'),
+                            'confidence': existing_confidence,
+                            'time_since_last': f"{time_diff.total_seconds():.1f}s",
+                            'action': 'no_change_needed'
+                        }), 200
+                
+                # Any other case - block duplicate
+                return jsonify({
+                    'status': 'duplicate_blocked',
+                    'message': f'{student.get("name")} already has attendance record in this session',
+                    'student_id': student_id,
+                    'student_name': student.get('name'),
+                    'existing_status': existing_status,
+                    'existing_confidence': existing_confidence,
+                    'action': 'blocked_duplicate'
+                }), 200
+            
+            print(f"✓ No existing record found - creating new attendance record")
             
             # Record NEW attendance entry with instructor_id, section_id, session_type, and time_block
+            today = date.today().isoformat()
             attendance_doc = {
                 'student_id': student_id,
                 'session_id': session_id,
@@ -474,21 +519,51 @@ def recognize_face():
                 'status': 'present'
             }
             
-            db.execute_query(
-                '''INSERT INTO attendance 
-                   (student_id, session_id, instructor_id, section_id, year, 
-                    session_type, time_block, course_name, class_year, 
-                    timestamp, date, confidence, status) 
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
-                (attendance_doc['student_id'], attendance_doc['session_id'], 
-                 attendance_doc['instructor_id'], attendance_doc['section_id'], 
-                 attendance_doc['year'], attendance_doc['session_type'], 
-                 attendance_doc['time_block'], attendance_doc['course_name'], 
-                 attendance_doc['class_year'], attendance_doc['timestamp'], 
-                 attendance_doc['date'], attendance_doc['confidence'], 
-                 attendance_doc['status']),
-                fetch=False
-            )
+            try:
+                db.execute_query(
+                    '''INSERT INTO attendance 
+                       (student_id, session_id, instructor_id, section_id, year, 
+                        session_type, time_block, course_name, class_year, 
+                        timestamp, date, confidence, status) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)''',
+                    (attendance_doc['student_id'], attendance_doc['session_id'], 
+                     attendance_doc['instructor_id'], attendance_doc['section_id'], 
+                     attendance_doc['year'], attendance_doc['session_type'], 
+                     attendance_doc['time_block'], attendance_doc['course_name'], 
+                     attendance_doc['class_year'], attendance_doc['timestamp'], 
+                     attendance_doc['date'], attendance_doc['confidence'], 
+                     attendance_doc['status']),
+                    fetch=False
+                )
+            except Exception as e:
+                # Handle database constraint violation (duplicate key)
+                if "Duplicate entry" in str(e) or "1062" in str(e):
+                    print(f"🚫 DATABASE CONSTRAINT: Duplicate prevented by unique constraint")
+                    print(f"   Student: {student.get('name')} ({student_id})")
+                    print(f"   Session: {session_id}")
+                    print(f"   → Updating existing record instead")
+                    
+                    # Update existing record
+                    db.execute_query(
+                        '''UPDATE attendance 
+                           SET confidence = GREATEST(confidence, %s), 
+                               timestamp = %s 
+                           WHERE student_id = %s AND session_id = %s''',
+                        (confidence, datetime.utcnow(), student_id, session_id),
+                        fetch=False
+                    )
+                    
+                    return jsonify({
+                        'status': 'duplicate_prevented',
+                        'message': f'{student.get("name")} already marked (database constraint)',
+                        'student_id': student_id,
+                        'student_name': student.get('name'),
+                        'confidence': confidence,
+                        'action': 'constraint_prevented'
+                    }), 200
+                else:
+                    # Re-raise other database errors
+                    raise e
             
             # Update session count (only for NEW entries)
             db.execute_query(
@@ -717,6 +792,56 @@ def end_session():
         }), 500
 
 
+@attendance_bp.route('/admin-reopen-session', methods=['POST'])
+@jwt_required()
+@role_required('admin')
+def admin_reopen_session():
+    """Admin-only: Reopen any session, including permanently ended ones"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        if 'session_id' not in data:
+            return jsonify({'error': 'Session ID required'}), 400
+        
+        session_id = data['session_id']
+        db = get_db()
+        
+        # Get session details
+        session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (session_id,))
+        if not session_result:
+            return jsonify({'error': 'Session not found'}), 404
+        
+        session = session_result[0]
+        
+        # Admin can reopen ANY session, regardless of status or time
+        print(f"🔧 Admin {user_id} reopening session {session_id} (status: {session.get('status')})")
+        
+        # Reopen the session
+        db.execute_query(
+            'UPDATE sessions SET status = %s, end_time = NULL WHERE id = %s',
+            ('active', session_id),
+            fetch=False
+        )
+        
+        # Log the admin action
+        print(f"✅ Admin reopened session {session_id} - Status changed to 'active'")
+        
+        return jsonify({
+            'message': f'Session reopened successfully by admin',
+            'session_id': session_id,
+            'previous_status': session.get('status'),
+            'new_status': 'active'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error in admin reopen session: {e}")
+        return jsonify({
+            'error': 'Failed to reopen session',
+            'message': str(e)
+        }), 500
+
+
 @attendance_bp.route('/reopen-session', methods=['POST'])
 @jwt_required()
 @role_required('instructor')
@@ -730,6 +855,7 @@ def reopen_session():
             return jsonify({'error': 'Session ID required'}), 400
         
         session_id = data['session_id']
+        force_reopen = data.get('force', False)
         db = get_db()
         
         # Get session info
@@ -755,16 +881,23 @@ def reopen_session():
         
         # Check if 12 hours have passed
         end_time = session.get('end_time')
+        
         if end_time:
-            from datetime import timedelta
-            hours_since_stop = (datetime.utcnow() - end_time).total_seconds() / 3600
+            current_time = datetime.utcnow()
+            hours_since_stop = (current_time - end_time).total_seconds() / 3600
             
-            if hours_since_stop < 12:
+            if hours_since_stop < 12 and not force_reopen:
                 return jsonify({
                     'error': 'Too soon',
                     'message': f'Session can be reopened after 12 hours. {12 - hours_since_stop:.1f} hours remaining.',
-                    'hours_remaining': 12 - hours_since_stop
+                    'hours_remaining': 12 - hours_since_stop,
+                    'can_force_reopen': True  # Indicate force reopen is available
                 }), 400
+            
+            if force_reopen and hours_since_stop < 12:
+                print(f"🚨 FORCE REOPEN: Instructor {user_id} force reopening session {session_id} after {hours_since_stop:.1f} hours")
+            else:
+                print(f"🔄 Normal reopen: Instructor {user_id} reopening session {session_id} after {hours_since_stop:.1f} hours")
         
         # Reopen the session - old attendance records remain in database
         db.execute_query(
@@ -773,7 +906,7 @@ def reopen_session():
             fetch=False
         )
         
-        logger.info(f"Session {session_id} reopened after 12 hours. Old attendance records preserved.")
+        logger.info(f"Session {session_id} reopened by instructor. Old attendance records preserved.")
         
         return jsonify({
             'message': 'Session reopened successfully. Previous attendance records are preserved.',
@@ -969,12 +1102,16 @@ def get_sessions():
             return jsonify({'error': 'User not found'}), 404
         
         # Build query based on user role
+        print(f"🔍 User role: {user['role']}, User ID: {user_id}")
+        
         if user['role'] == 'instructor':
             sessions = db.execute_query('SELECT * FROM sessions WHERE instructor_id = %s ORDER BY start_time DESC', (user_id,))
+            print(f"📊 Found {len(sessions)} sessions for instructor {user_id}")
         else:
             sessions = db.execute_query('SELECT * FROM sessions ORDER BY start_time DESC')
+            print(f"📊 Found {len(sessions)} total sessions for admin")
         
-        from datetime import timedelta
+
         session_list = []
         for session in sessions:
             # Check if session can be reopened (stopped for 12+ hours)
@@ -988,11 +1125,11 @@ def get_sessions():
                 else:
                     hours_until_reopen = 12 - hours_since_stop
             
-            session_list.append({
-                'id': str(session['id']),
+            session_data = {
+                'id': session['id'],  # Keep as integer
                 'name': session.get('name', 'Unknown Session'),
                 'instructor_name': session.get('instructor_name', 'Unknown'),
-                'course': session.get('course_name', ''),
+                'course_name': session.get('course_name', ''),
                 'section_id': session.get('section_id', ''),
                 'year': session.get('year', ''),
                 'session_type': session.get('session_type', ''),
@@ -1003,9 +1140,15 @@ def get_sessions():
                 'attendance_count': session.get('attendance_count', 0),
                 'can_reopen': can_reopen,
                 'hours_until_reopen': hours_until_reopen
-            })
+            }
+            
+            print(f"📊 Session {session['id']}: {session_data['name']} - Status: {session_data['status']}")
+            session_list.append(session_data)
         
-        return jsonify(session_list), 200
+        return jsonify({
+            'sessions': session_list,
+            'total': len(session_list)
+        }), 200
     
     except Exception as e:
         logger.error(f"Error getting sessions: {e}", exc_info=True)
