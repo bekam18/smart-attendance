@@ -6,10 +6,585 @@ import os
 from db.mysql import get_db
 from utils.security import hash_password, role_required
 from config import config
+from utils.timezone_helper import get_ethiopian_time
+from middleware.working_security import working_security_check, working_json_validation, working_audit_log
 
 admin_bp = Blueprint('admin', __name__)
 
+# Simple test route
+@admin_bp.route('/simple-test', methods=['GET'])
+def simple_test():
+    """Simple test route without JWT"""
+    return jsonify({'message': 'Simple test working'}), 200
+
+# Real data endpoint without JWT for testing
+@admin_bp.route('/analytics/real-data-test', methods=['GET'])
+def real_data_test():
+    """Test real data without JWT"""
+    try:
+        print("🔍 Real data test endpoint called")
+        db = get_db()
+        
+        # Get real section data
+        section_stats = db.execute_query("""
+            SELECT 
+                a.section_id as section,
+                COUNT(*) as total_records,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2
+                ) as attendance_percentage
+            FROM attendance a
+            GROUP BY a.section_id
+            ORDER BY a.section_id
+        """)
+        
+        print(f"✅ Query executed: {len(section_stats)} results")
+        
+        # Convert Decimal to float for JSON serialization
+        for stat in section_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+        
+        return jsonify({
+            'message': 'Real data test successful',
+            'data': section_stats,
+            'count': len(section_stats)
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Real data test error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# Analytics routes - moved to top for debugging
+@admin_bp.route('/analytics/test', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def test_analytics():
+    """Test analytics endpoint"""
+    return jsonify({'message': 'Analytics endpoint working', 'data': []}), 200
+
+@admin_bp.route('/analytics/simple-data', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def simple_analytics_data():
+    """Simple analytics with hardcoded data"""
+    return jsonify([
+        {'section': 'A', 'attendance_percentage': 85.5, 'present_count': 17, 'absent_count': 3},
+        {'section': 'B', 'attendance_percentage': 92.0, 'present_count': 23, 'absent_count': 2}
+    ]), 200
+
+@admin_bp.route('/analytics/section-attendance', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_section_attendance_analytics():
+    """Get attendance analytics by section"""
+    try:
+        print("🔍 Section analytics endpoint called")
+        db = get_db()
+        print("✅ Database connection obtained")
+        
+        # Simple query to get section attendance data
+        section_stats = db.execute_query("""
+            SELECT 
+                a.section_id as section,
+                COUNT(*) as total_records,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2
+                ) as attendance_percentage
+            FROM attendance a
+            GROUP BY a.section_id
+            ORDER BY a.section_id
+        """)
+        
+        print(f"✅ Query executed successfully: {len(section_stats)} results")
+        
+        # Convert Decimal to float for JSON serialization
+        for stat in section_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+        
+        print(f"📊 Returning section data: {section_stats}")
+        return jsonify(section_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Section analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/daily-attendance', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_daily_attendance_analytics():
+    """Get daily attendance trends for the last 30 days"""
+    try:
+        print("🔍 Daily analytics endpoint called")
+        db = get_db()
+        
+        daily_stats = db.execute_query("""
+            SELECT 
+                a.date,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent,
+                COUNT(*) as total
+            FROM attendance a
+            GROUP BY a.date
+            ORDER BY a.date DESC
+            LIMIT 30
+        """)
+        
+        print(f"✅ Daily query executed: {len(daily_stats)} results")
+        
+        # Convert date objects to strings for JSON serialization
+        for stat in daily_stats:
+            if 'date' in stat and stat['date'] is not None:
+                stat['date'] = str(stat['date'])
+        
+        return jsonify(daily_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Daily analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/course-performance', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_course_performance_analytics():
+    """Get attendance performance by course"""
+    try:
+        print("🔍 Course analytics endpoint called")
+        db = get_db()
+        
+        course_stats = db.execute_query("""
+            SELECT 
+                a.course_name,
+                COUNT(DISTINCT a.student_id) as unique_students,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2
+                ) as attendance_percentage
+            FROM attendance a
+            GROUP BY a.course_name
+            ORDER BY attendance_percentage DESC
+        """)
+        
+        print(f"✅ Course query executed: {len(course_stats)} results")
+        
+        # Convert Decimal to float for JSON serialization
+        for stat in course_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+        
+        return jsonify(course_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Course analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/instructor-performance', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_instructor_performance_analytics():
+    """Get performance analytics by instructor"""
+    try:
+        print("🔍 Instructor analytics endpoint called")
+        db = get_db()
+        
+        instructor_stats = db.execute_query("""
+            SELECT 
+                u.name as instructor_name,
+                COUNT(DISTINCT s.id) as total_sessions,
+                COUNT(DISTINCT a.student_id) as unique_students,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(a.id), 2
+                ) as attendance_percentage
+            FROM users u
+            LEFT JOIN sessions s ON u.id = s.instructor_id
+            LEFT JOIN attendance a ON s.id = a.session_id
+            WHERE u.role = 'instructor' AND a.id IS NOT NULL
+            GROUP BY u.id, u.name
+            ORDER BY attendance_percentage DESC
+        """)
+        
+        print(f"✅ Instructor query executed: {len(instructor_stats)} results")
+        
+        # Convert Decimal to float for JSON serialization
+        for stat in instructor_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+        
+        return jsonify(instructor_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Instructor analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/time-block-analysis', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_time_block_analysis():
+    """Get attendance analysis by time blocks (morning vs afternoon)"""
+    try:
+        print("🔍 Time block analytics endpoint called")
+        db = get_db()
+        
+        time_block_stats = db.execute_query("""
+            SELECT 
+                a.time_block,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                COUNT(*) as total_records,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2
+                ) as attendance_percentage
+            FROM attendance a
+            WHERE a.time_block IS NOT NULL
+            GROUP BY a.time_block
+            ORDER BY a.time_block
+        """)
+        
+        print(f"✅ Time block query executed: {len(time_block_stats)} results")
+        
+        # Convert Decimal to float for JSON serialization
+        for stat in time_block_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+        
+        return jsonify(time_block_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Time block analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/monthly-attendance', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_monthly_attendance_analytics():
+    """Get monthly attendance analytics for the last 12 months"""
+    try:
+        print("🔍 Monthly analytics endpoint called")
+        db = get_db()
+        
+        monthly_stats = db.execute_query("""
+            SELECT 
+                DATE_FORMAT(a.date, '%Y-%m') as month,
+                MONTHNAME(a.date) as month_name,
+                YEAR(a.date) as year,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                COUNT(*) as total_records,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(*), 2
+                ) as attendance_percentage,
+                COUNT(DISTINCT a.student_id) as unique_students,
+                COUNT(DISTINCT a.session_id) as total_sessions
+            FROM attendance a
+            WHERE a.date >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+            GROUP BY DATE_FORMAT(a.date, '%Y-%m'), MONTHNAME(a.date), YEAR(a.date)
+            ORDER BY DATE_FORMAT(a.date, '%Y-%m') DESC
+            LIMIT 12
+        """)
+        
+        print(f"✅ Monthly query executed: {len(monthly_stats)} results")
+        
+        # Convert Decimal to float for JSON serialization and format data
+        for stat in monthly_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+            
+            # Create display name for month
+            stat['display_name'] = f"{stat['month_name']} {stat['year']}"
+        
+        # Reverse to show oldest to newest for better chart display
+        monthly_stats.reverse()
+        
+        return jsonify(monthly_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Monthly analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/instructor-activity', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_instructor_activity_analytics():
+    """Get instructor activity analytics from instructor dashboard data"""
+    try:
+        print("🔍 Instructor activity analytics endpoint called")
+        db = get_db()
+        
+        instructor_activity = db.execute_query("""
+            SELECT 
+                u.name as instructor_name,
+                u.id as instructor_id,
+                COUNT(DISTINCT s.id) as total_sessions,
+                COUNT(DISTINCT a.student_id) as unique_students_taught,
+                COUNT(a.id) as total_attendance_records,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(a.id), 2
+                ) as attendance_percentage,
+                MAX(s.start_time) as last_session_date,
+                COUNT(DISTINCT a.course_name) as courses_taught
+            FROM users u
+            LEFT JOIN sessions s ON u.id = s.instructor_id
+            LEFT JOIN attendance a ON s.id = a.session_id
+            WHERE u.role = 'instructor' AND s.id IS NOT NULL
+            GROUP BY u.id, u.name
+            ORDER BY total_sessions DESC, attendance_percentage DESC
+        """)
+        
+        print(f"✅ Instructor activity query executed: {len(instructor_activity)} results")
+        
+        # Convert Decimal to float and format dates
+        for stat in instructor_activity:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+            if 'last_session_date' in stat and stat['last_session_date'] is not None:
+                stat['last_session_date'] = stat['last_session_date'].isoformat()
+        
+        return jsonify(instructor_activity), 200
+        
+    except Exception as e:
+        print(f"❌ Instructor activity analytics error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/session-type-comparison', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_session_type_comparison():
+    """Get session type comparison analytics (lab vs theory)"""
+    try:
+        print("🔍 Session type comparison analytics endpoint called")
+        db = get_db()
+        
+        session_type_stats = db.execute_query("""
+            SELECT 
+                s.session_type,
+                COUNT(DISTINCT s.id) as total_sessions,
+                COUNT(a.id) as total_attendance_records,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(a.id), 2
+                ) as attendance_percentage,
+                COUNT(DISTINCT a.student_id) as unique_students,
+                AVG(a.confidence) as avg_confidence
+            FROM sessions s
+            LEFT JOIN attendance a ON s.id = a.session_id
+            WHERE s.session_type IS NOT NULL AND a.id IS NOT NULL
+            GROUP BY s.session_type
+            ORDER BY attendance_percentage DESC
+        """)
+        
+        print(f"✅ Session type query executed: {len(session_type_stats)} results")
+        
+        # Convert Decimal to float
+        for stat in session_type_stats:
+            if 'attendance_percentage' in stat and stat['attendance_percentage'] is not None:
+                stat['attendance_percentage'] = float(stat['attendance_percentage'])
+            if 'avg_confidence' in stat and stat['avg_confidence'] is not None:
+                stat['avg_confidence'] = float(stat['avg_confidence'])
+        
+        return jsonify(session_type_stats), 200
+        
+    except Exception as e:
+        print(f"❌ Session type comparison error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/analytics/recent-instructor-sessions', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_recent_instructor_sessions():
+    """Get recent instructor sessions for admin dashboard"""
+    try:
+        print("🔍 Recent instructor sessions analytics endpoint called")
+        db = get_db()
+        
+        recent_sessions = db.execute_query("""
+            SELECT 
+                s.id as session_id,
+                s.name as session_name,
+                s.course as course_name,
+                s.session_type,
+                s.time_block,
+                s.start_time,
+                s.status as session_status,
+                u.name as instructor_name,
+                COUNT(a.id) as total_attendance,
+                SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) as present_count,
+                SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) as absent_count,
+                ROUND(
+                    (SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) * 100.0) / COUNT(a.id), 2
+                ) as attendance_percentage
+            FROM sessions s
+            LEFT JOIN users u ON s.instructor_id = u.id
+            LEFT JOIN attendance a ON s.id = a.session_id
+            WHERE s.start_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            GROUP BY s.id, s.name, s.course, s.session_type, s.time_block, s.start_time, s.status, u.name
+            ORDER BY s.start_time DESC
+            LIMIT 20
+        """)
+        
+        print(f"✅ Recent sessions query executed: {len(recent_sessions)} results")
+        
+        # Convert Decimal to float and format dates
+        for session in recent_sessions:
+            if 'attendance_percentage' in session and session['attendance_percentage'] is not None:
+                session['attendance_percentage'] = float(session['attendance_percentage'])
+            if 'start_time' in session and session['start_time'] is not None:
+                session['start_time'] = session['start_time'].isoformat()
+        
+        return jsonify(recent_sessions), 200
+        
+    except Exception as e:
+        print(f"❌ Recent instructor sessions error: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@admin_bp.route('/update-instructor-sections', methods=['POST'])
+@jwt_required()
+@role_required('admin')
+def update_instructor_sections():
+    """Update sections assigned to an instructor (admin only)"""
+    try:
+        data = request.get_json()
+        
+        if 'instructor_id' not in data or 'sections' not in data:
+            return jsonify({'error': 'instructor_id and sections are required'}), 400
+        
+        instructor_id = data['instructor_id']
+        sections = data['sections']
+        
+        # Validate sections is a list
+        if not isinstance(sections, list):
+            return jsonify({'error': 'sections must be an array'}), 400
+        
+        # Validate section values (A, B, C, D, etc.)
+        valid_sections = ['A', 'B', 'C', 'D', 'E', 'F']
+        for section in sections:
+            if section not in valid_sections:
+                return jsonify({'error': f'Invalid section: {section}. Must be one of {valid_sections}'}), 400
+        
+        db = get_db()
+        
+        # Check if instructor exists
+        instructor_result = db.execute_query('SELECT * FROM users WHERE id = %s AND role = %s', (instructor_id, 'instructor'))
+        if not instructor_result:
+            return jsonify({'error': 'Instructor not found'}), 404
+        
+        instructor = instructor_result[0]
+        
+        # Update sections
+        import json
+        db.execute_query(
+            'UPDATE users SET sections = %s WHERE id = %s',
+            (json.dumps(sections), instructor_id),
+            fetch=False
+        )
+        
+        return jsonify({
+            'message': f'Successfully updated sections for {instructor.get("name")}',
+            'instructor_name': instructor.get('name'),
+            'sections': sections
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': 'Failed to update sections', 'message': str(e)}), 500
+
+@admin_bp.route('/get-instructors', methods=['GET'])
+@jwt_required()
+@role_required('admin')
+def get_instructors():
+    """Get all instructors with their current section assignments (admin only)"""
+    try:
+        db = get_db()
+        
+        instructors_result = db.execute_query(
+            'SELECT id, username, name, email, course_name, courses, class_year, sections, session_types, department, enabled FROM users WHERE role = %s ORDER BY name',
+            ('instructor',)
+        )
+        
+        instructors = []
+        for instructor in instructors_result:
+            import json
+            
+            # Parse sections
+            sections = []
+            if instructor.get('sections'):
+                try:
+                    sections = json.loads(instructor['sections'])
+                except (json.JSONDecodeError, TypeError):
+                    sections = []
+            
+            # Parse session types
+            session_types = []
+            if instructor.get('session_types'):
+                try:
+                    session_types = json.loads(instructor['session_types'])
+                except (json.JSONDecodeError, TypeError):
+                    session_types = []
+            
+            # Parse courses array
+            courses = []
+            if instructor.get('courses'):
+                try:
+                    courses = json.loads(instructor['courses'])
+                except (json.JSONDecodeError, TypeError):
+                    courses = []
+            
+            # Backward compatibility: if no courses array, use course_name
+            if not courses and instructor.get('course_name'):
+                courses = [instructor['course_name']]
+            
+            instructors.append({
+                'id': instructor['id'],
+                'username': instructor['username'],
+                'name': instructor['name'],
+                'email': instructor['email'],
+                'department': instructor.get('department', ''),
+                'course_name': instructor['course_name'],
+                'courses': courses,
+                'class_year': instructor['class_year'],
+                'sections': sections,
+                'session_types': session_types,
+                'enabled': instructor.get('enabled', True)
+            })
+        
+        return jsonify({'instructors': instructors}), 200
+        
+    except Exception as e:
+        return jsonify({'error': 'Failed to get instructors', 'message': str(e)}), 500
+
 @admin_bp.route('/add-instructor', methods=['POST'])
+@working_security_check
+@working_json_validation(required_fields=['username', 'password', 'email', 'name', 'class_year'])
+@working_audit_log('ADD_INSTRUCTOR')
 @jwt_required()
 @role_required('admin')
 def add_instructor():
@@ -52,11 +627,14 @@ def add_instructor():
     if theory_session:
         session_types.append('theory')
     
-    # Create instructor user with courses array
+    # Get sections from request data
+    sections = data.get('sections', [])
+    
+    # Create instructor user with courses array and sections
     import json
     query = """
-        INSERT INTO users (username, password, email, name, role, department, course_name, courses, class_year, session_types, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO users (username, password, email, name, role, department, course_name, courses, class_year, session_types, sections, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     # Store first course in course_name for backward compatibility
     first_course = courses[0] if courses else ''
@@ -72,12 +650,11 @@ def add_instructor():
         json.dumps(courses),  # New multi-course field
         str(data['class_year']),
         json.dumps(session_types),
-        datetime.utcnow()
+        json.dumps(sections),  # Sections assignment
+        get_ethiopian_time()
     )
     
     instructor_id = db.execute_query(query, values, fetch=False)
-    
-    print(f"✅ Instructor added: {data['name']} - Courses: {courses} - Year: {data['class_year']} - Sessions: {session_types}")
     
     return jsonify({
         'message': 'Instructor added successfully',
@@ -87,7 +664,7 @@ def add_instructor():
 @admin_bp.route('/instructors', methods=['GET'])
 @jwt_required()
 @role_required('admin')
-def get_instructors():
+def get_instructors_list():
     """Get all instructors (admin only) - returns courses array"""
     import json
     db = get_db()
@@ -134,6 +711,9 @@ def get_instructors():
     return jsonify(instructor_list), 200
 
 @admin_bp.route('/add-student', methods=['POST'])
+@working_security_check
+@working_json_validation(required_fields=['username', 'password', 'email', 'name', 'student_id'])
+@working_audit_log('ADD_STUDENT')
 @jwt_required()
 @role_required('admin')
 def add_student():
@@ -174,7 +754,7 @@ def add_student():
         data['email'],
         data['name'],
         'student',
-        datetime.utcnow()
+        get_ethiopian_time()
     )
     
     user_id = db.execute_query(user_query, user_values, fetch=False)
@@ -193,7 +773,7 @@ def add_student():
         data.get('year', ''),
         data.get('section', ''),
         False,
-        datetime.utcnow()
+        get_ethiopian_time()
     )
     
     db.execute_query(student_query, student_values, fetch=False)
@@ -773,13 +1353,13 @@ def update_admin_settings():
                 UPDATE admin_settings 
                 SET face_recognition_threshold = %s, session_timeout_minutes = %s, updated_at = %s
                 WHERE id = %s
-            """, (face_threshold, timeout_minutes, datetime.utcnow(), existing[0]['id']), fetch=False)
+            """, (face_threshold, timeout_minutes, get_ethiopian_time(), existing[0]['id']), fetch=False)
         else:
             # Insert new
             db.execute_query("""
                 INSERT INTO admin_settings (face_recognition_threshold, session_timeout_minutes, updated_at)
                 VALUES (%s, %s, %s)
-            """, (face_threshold, timeout_minutes, datetime.utcnow()), fetch=False)
+            """, (face_threshold, timeout_minutes, get_ethiopian_time()), fetch=False)
         
         print(f"✅ Admin settings updated: threshold={face_threshold}, timeout={timeout_minutes}")
         return jsonify({'message': 'Settings updated successfully'}), 200

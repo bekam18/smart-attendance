@@ -74,8 +74,7 @@ export const adminAPI = {
   addStudent: (data: any) =>
     api.post('/api/admin/add-student', data),
   
-  getInstructors: () =>
-    api.get('/api/admin/instructors'),
+
   
   getStudents: () =>
     api.get('/api/admin/students'),
@@ -138,6 +137,15 @@ export const adminAPI = {
   updateAdminSettings: (settings: any) =>
     api.put('/api/admin/settings', settings),
   
+  getInstructors: () =>
+    api.get('/api/admin/get-instructors'),
+  
+  updateInstructorSections: (instructorId: number, sections: string[]) =>
+    api.post('/api/admin/update-instructor-sections', {
+      instructor_id: instructorId,
+      sections: sections
+    }),
+  
   getActiveSessions: (filters?: any) =>
     api.get('/api/admin/active-sessions', { params: filters }),
   
@@ -162,6 +170,34 @@ export const adminAPI = {
   
   adminReopenSession: (sessionId: number) =>
     api.post('/api/attendance/admin-reopen-session', { session_id: sessionId }),
+  
+  // Analytics API
+  getSectionAttendanceAnalytics: () =>
+    api.get('/api/admin/analytics/section-attendance'),
+  
+  getDailyAttendanceAnalytics: () =>
+    api.get('/api/admin/analytics/daily-attendance'),
+  
+  getCoursePerformanceAnalytics: () =>
+    api.get('/api/admin/analytics/course-performance'),
+  
+  getInstructorPerformanceAnalytics: () =>
+    api.get('/api/admin/analytics/instructor-performance'),
+  
+  getTimeBlockAnalysis: () =>
+    api.get('/api/admin/analytics/time-block-analysis'),
+  
+  getMonthlyAttendanceAnalytics: () =>
+    api.get('/api/admin/analytics/monthly-attendance'),
+  
+  getInstructorActivityAnalytics: () =>
+    api.get('/api/admin/analytics/instructor-activity'),
+  
+  getSessionTypeComparison: () =>
+    api.get('/api/admin/analytics/session-type-comparison'),
+  
+  getRecentInstructorSessions: () =>
+    api.get('/api/admin/analytics/recent-instructor-sessions'),
 };
 
 // Student API
@@ -192,11 +228,10 @@ export const attendanceAPI = {
   markAbsent: (sessionId: string) =>
     api.post('/api/attendance/mark-absent', { session_id: sessionId }),
   
-  reopenSession: (sessionId: string) =>
-    api.post('/api/attendance/reopen-session', { session_id: sessionId }),
+
   
-  forceReopenSession: (sessionId: string) =>
-    api.post('/api/attendance/reopen-session', { session_id: sessionId, force: true }),
+  checkSemesterEligibility: (data: { course_name: string; section_id: string; year: string }) =>
+    api.post('/api/attendance/check-semester-eligibility', data),
   
   recognize: async (image: Blob | string, sessionId: string) => {
     console.log('🔍 Sending recognition request...');
@@ -263,6 +298,9 @@ export const attendanceAPI = {
   
   getSessions: () =>
     api.get('/api/attendance/sessions'),
+  
+  instructorReopenSession: (sessionId: number) =>
+    api.post('/api/attendance/instructor-reopen-session', { session_id: sessionId }),
 };
 
 // Instructor API

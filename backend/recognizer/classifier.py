@@ -250,9 +250,9 @@ class FaceRecognizer:
                     'message': 'Model prediction error'
                 }
             
-            # Use production threshold (0.60)
-            # Faces with confidence >= 0.60 will be recognized
-            NEW_THRESHOLD = 0.60
+            # Use production threshold (0.75) - increased for better accuracy
+            # Faces with confidence >= 0.75 will be recognized
+            NEW_THRESHOLD = 0.75
             print(f"🎯 [Classifier] Using threshold: {NEW_THRESHOLD}")
             print(f"🔍 [Classifier] Checking: confidence {confidence:.3f} >= threshold {NEW_THRESHOLD}")
             print(f"🔍 [Classifier] Top 3 predictions:")

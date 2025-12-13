@@ -31,6 +31,7 @@ interface ReportResult {
   total_sessions: number;
   total_students: number;
   data: ReportData[];
+  message?: string;
 }
 
 export default function InstructorReports() {
@@ -46,7 +47,16 @@ export default function InstructorReports() {
     course_name: '',
     start_date: '',
     end_date: '',
-    specific_date: '2025-12-06' // Default to date with attendance data
+    specific_date: new Date().toISOString().split('T')[0], // Today's date
+    week_start: new Date().toISOString().split('T')[0], // Week start date
+    week_end: (() => {
+      const startDate = new Date();
+      const endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 6);
+      return endDate.toISOString().split('T')[0];
+    })(), // Week end date (automatically calculated)
+    selected_month: new Date().getMonth() + 1, // Current month (1-12)
+    selected_year: new Date().getFullYear() // Current year
   });
 
   useEffect(() => {
@@ -108,43 +118,51 @@ export default function InstructorReports() {
 
     switch (filters.report_type) {
       case 'daily':
-        start = filters.specific_date || today.toISOString().split('T')[0];
+        start = filters.specific_date;
         end = start;
         break;
       
       case 'weekly':
-        // Get start of current week (Monday)
-        const startOfWeek = new Date(today);
-        startOfWeek.setDate(today.getDate() - today.getDay() + 1);
-        start = filters.start_date || startOfWeek.toISOString().split('T')[0];
+        // Use week start date entered by instructor, add 7 days for end
+        const weekStartDate = new Date(filters.week_start);
+        start = filters.week_start;
         
-        const endOfWeek = new Date(startOfWeek);
-        endOfWeek.setDate(startOfWeek.getDate() + 6);
-        end = filters.end_date || endOfWeek.toISOString().split('T')[0];
+        const weekEndDate = new Date(weekStartDate);
+        weekEndDate.setDate(weekStartDate.getDate() + 6); // Add 6 days (7 days total)
+        end = weekEndDate.toISOString().split('T')[0];
         break;
       
       case 'monthly':
-        // Get start of current month
-        const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        // Use selected month and year
+        const startOfMonth = new Date(filters.selected_year, filters.selected_month - 1, 1);
         start = startOfMonth.toISOString().split('T')[0];
         
-        const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        const endOfMonth = new Date(filters.selected_year, filters.selected_month, 0);
         end = endOfMonth.toISOString().split('T')[0];
         break;
       
       case 'semester':
-        // Assume semester is 4 months
-        const startOfSemester = new Date(today);
-        startOfSemester.setMonth(today.getMonth() - 4);
-        start = startOfSemester.toISOString().split('T')[0];
-        end = today.toISOString().split('T')[0];
+        // Semester is typically 4-5 months, use current semester logic
+        const currentMonth = today.getMonth();
+        if (currentMonth >= 8) {
+          // Fall semester (September - January)
+          start = `${today.getFullYear()}-09-01`;
+          end = `${today.getFullYear() + 1}-01-31`;
+        } else if (currentMonth >= 1 && currentMonth <= 4) {
+          // Spring semester (February - May)
+          start = `${today.getFullYear()}-02-01`;
+          end = `${today.getFullYear()}-05-31`;
+        } else {
+          // Summer semester (June - August)
+          start = `${today.getFullYear()}-06-01`;
+          end = `${today.getFullYear()}-08-31`;
+        }
         break;
       
       case 'yearly':
-        // Get start of academic year (September)
-        const currentYear = today.getMonth() >= 8 ? today.getFullYear() : today.getFullYear() - 1;
-        start = `${currentYear}-09-01`;
-        end = `${currentYear + 1}-08-31`;
+        // Use selected year (academic year: September to August)
+        start = `${filters.selected_year}-09-01`;
+        end = `${filters.selected_year + 1}-08-31`;
         break;
       
       default:
@@ -181,7 +199,13 @@ export default function InstructorReports() {
       
       const response = await instructorAPI.generateReport(reportFilters);
       setReportResult(response.data);
-      toast.success('Report generated successfully!');
+      
+      // Check if there's no data for the selected period
+      if (response.data.total_sessions === 0 || response.data.data.length === 0) {
+        toast.error(response.data.message || `No attendance data found for the selected ${filters.report_type} period`);
+      } else {
+        toast.success('Report generated successfully!');
+      }
     } catch (error) {
       toast.error('Failed to generate report');
       console.error(error);
@@ -193,6 +217,11 @@ export default function InstructorReports() {
   const handleDownloadCSV = async () => {
     if (!reportResult) {
       toast.error('Please generate a report first');
+      return;
+    }
+
+    if (reportResult.total_sessions === 0) {
+      toast.error('No data available to download');
       return;
     }
 
@@ -221,6 +250,11 @@ export default function InstructorReports() {
       return;
     }
 
+    if (reportResult.total_sessions === 0) {
+      toast.error('No data available to download');
+      return;
+    }
+
     try {
       const { start, end } = getDateRange();
       
@@ -241,6 +275,45 @@ export default function InstructorReports() {
   };
 
   const belowThresholdCount = reportResult?.data.filter(s => s.below_threshold).length || 0;
+
+  // Helper function to get available years (last 5 years + current + next 2)
+  const getAvailableYears = () => {
+    const currentYear = new Date().getFullYear();
+    const years = [];
+    for (let i = currentYear - 5; i <= currentYear + 2; i++) {
+      years.push(i);
+    }
+    return years;
+  };
+
+  // Helper function to get month names
+  const getMonthNames = () => [
+    { value: 1, name: 'January' },
+    { value: 2, name: 'February' },
+    { value: 3, name: 'March' },
+    { value: 4, name: 'April' },
+    { value: 5, name: 'May' },
+    { value: 6, name: 'June' },
+    { value: 7, name: 'July' },
+    { value: 8, name: 'August' },
+    { value: 9, name: 'September' },
+    { value: 10, name: 'October' },
+    { value: 11, name: 'November' },
+    { value: 12, name: 'December' }
+  ];
+
+  // Helper function to calculate week end date when week start changes
+  const handleWeekStartChange = (weekStart: string) => {
+    const startDate = new Date(weekStart);
+    const endDate = new Date(startDate);
+    endDate.setDate(startDate.getDate() + 6);
+    
+    setFilters({
+      ...filters, 
+      week_start: weekStart,
+      week_end: endDate.toISOString().split('T')[0] // Update week end date
+    });
+  };
 
   return (
     <Layout title="Attendance Reports">
@@ -276,11 +349,11 @@ export default function InstructorReports() {
                 onChange={(e) => setFilters({...filters, report_type: e.target.value})}
                 className="w-full px-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all duration-300 outline-none hover:border-blue-300 text-sm"
               >
-                <option value="daily">Daily Report</option>
-                <option value="weekly">Weekly Report</option>
-                <option value="monthly">Monthly Report</option>
-                <option value="semester">Semester Report</option>
-                <option value="yearly">Yearly Report</option>
+                <option value="daily">📅 Daily Report</option>
+                <option value="weekly">📊 Weekly Report</option>
+                <option value="monthly">📈 Monthly Report</option>
+                <option value="semester">🎓 Semester Report</option>
+                <option value="yearly">📋 Yearly Report</option>
               </select>
             </div>
 
@@ -324,7 +397,7 @@ export default function InstructorReports() {
             {/* Date Inputs based on Report Type */}
             {filters.report_type === 'daily' && (
               <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Specific Date</label>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Select Date</label>
                 <input
                   type="date"
                   value={filters.specific_date}
@@ -337,22 +410,126 @@ export default function InstructorReports() {
             {filters.report_type === 'weekly' && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Week Start</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Week Start Date</label>
                   <input
                     type="date"
-                    value={filters.start_date}
-                    onChange={(e) => setFilters({...filters, start_date: e.target.value})}
+                    value={filters.week_start}
+                    onChange={(e) => handleWeekStartChange(e.target.value)}
                     className="w-full px-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all duration-300 outline-none hover:border-blue-300 text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Week End</label>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Week End Date</label>
                   <input
                     type="date"
-                    value={filters.end_date}
-                    onChange={(e) => setFilters({...filters, end_date: e.target.value})}
-                    className="w-full px-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all duration-300 outline-none hover:border-blue-300 text-sm"
+                    value={filters.week_end}
+                    readOnly
+                    disabled
+                    className="w-full px-4 py-2.5 bg-gray-100 border-2 border-gray-200 rounded-lg text-sm text-gray-600 cursor-not-allowed"
                   />
+                </div>
+                {filters.week_start && (
+                  <div className="col-span-2 mt-2 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800">
+                      <strong>Week Period:</strong> {filters.week_start} to {(() => {
+                        const endDate = new Date(filters.week_start);
+                        endDate.setDate(endDate.getDate() + 6);
+                        return endDate.toISOString().split('T')[0];
+                      })()}
+                    </p>
+                    <p className="text-xs text-blue-600 mt-1">
+                      System automatically calculates 7-day period from start date
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {filters.report_type === 'monthly' && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Month</label>
+                  <select
+                    value={filters.selected_month}
+                    onChange={(e) => setFilters({...filters, selected_month: parseInt(e.target.value)})}
+                    className="w-full px-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all duration-300 outline-none hover:border-blue-300 text-sm"
+                  >
+                    {getMonthNames().map((month) => (
+                      <option key={month.value} value={month.value}>
+                        {month.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">Year</label>
+                  <select
+                    value={filters.selected_year}
+                    onChange={(e) => setFilters({...filters, selected_year: parseInt(e.target.value)})}
+                    className="w-full px-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all duration-300 outline-none hover:border-blue-300 text-sm"
+                  >
+                    {getAvailableYears().map((year) => (
+                      <option key={year} value={year}>
+                        {year}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {filters.report_type === 'semester' && (
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Current Semester</label>
+                <div className="p-4 bg-gradient-to-r from-purple-50 to-indigo-50 border border-purple-200 rounded-lg">
+                  <div className="text-sm text-purple-800 font-medium mb-2">
+                    🎓 Automatic Semester Detection
+                  </div>
+                  <div className="text-sm text-purple-700">
+                    {(() => {
+                      const today = new Date();
+                      const currentMonth = today.getMonth();
+                      let semesterInfo = '';
+                      
+                      if (currentMonth >= 8) {
+                        // Fall semester (September - January)
+                        semesterInfo = `Fall Semester: September ${today.getFullYear()} - January ${today.getFullYear() + 1}`;
+                      } else if (currentMonth >= 1 && currentMonth <= 4) {
+                        // Spring semester (February - May)
+                        semesterInfo = `Spring Semester: February ${today.getFullYear()} - May ${today.getFullYear()}`;
+                      } else {
+                        // Summer semester (June - August)
+                        semesterInfo = `Summer Semester: June ${today.getFullYear()} - August ${today.getFullYear()}`;
+                      }
+                      
+                      return semesterInfo;
+                    })()}
+                  </div>
+                  <div className="text-xs text-purple-600 mt-2">
+                    System automatically detects current semester based on today's date
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {filters.report_type === 'yearly' && (
+              <div>
+                <label className="block text-xs font-semibold text-gray-700 mb-1.5">Academic Year</label>
+                <select
+                  value={filters.selected_year}
+                  onChange={(e) => setFilters({...filters, selected_year: parseInt(e.target.value)})}
+                  className="w-full px-4 py-2.5 bg-gray-50 border-2 border-gray-200 rounded-lg focus:ring-4 focus:ring-blue-200 focus:border-blue-500 transition-all duration-300 outline-none hover:border-blue-300 text-sm"
+                >
+                  {getAvailableYears().map((year) => (
+                    <option key={year} value={year}>
+                      {year}-{year + 1} Academic Year
+                    </option>
+                  ))}
+                </select>
+                <div className="mt-2 p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <p className="text-sm text-green-800">
+                    <strong>Academic Year Period:</strong> September {filters.selected_year} to August {filters.selected_year + 1}
+                  </p>
                 </div>
               </div>
             )}
@@ -381,48 +558,73 @@ export default function InstructorReports() {
         {/* Report Summary */}
         {reportResult && (
           <>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-              <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow">
-                <div className="text-sm opacity-90">Total Students</div>
-                <div className="text-3xl font-bold mt-2">{reportResult.total_students}</div>
+            {reportResult.total_sessions === 0 ? (
+              /* No Data Found */
+              <div className="bg-white rounded-2xl shadow-lg p-8 mb-6 text-center">
+                <div className="inline-flex items-center justify-center w-16 h-16 bg-yellow-500 rounded-xl mb-4 shadow-lg">
+                  <AlertTriangle className="w-8 h-8 text-white" />
+                </div>
+                <h3 className="text-xl font-bold text-gray-800 mb-2">No Data Found</h3>
+                <p className="text-gray-600 mb-4">
+                  {reportResult.message || `No attendance sessions found for the selected ${reportResult.report_type} period.`}
+                </p>
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <p className="text-sm text-blue-800">
+                    <strong>Selected Period:</strong> {reportResult.start_date} to {reportResult.end_date}
+                  </p>
+                  <p className="text-sm text-blue-600 mt-1">
+                    Try selecting a different time period with existing attendance sessions.
+                  </p>
+                </div>
               </div>
-              
-              <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow">
-                <div className="text-sm opacity-90">Total Sessions</div>
-                <div className="text-3xl font-bold mt-2">{reportResult.total_sessions}</div>
+            ) : (
+              /* Report Data Found */
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                <div className="bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-lg shadow">
+                  <div className="text-sm opacity-90">Total Students</div>
+                  <div className="text-3xl font-bold mt-2">{reportResult.total_students}</div>
+                </div>
+                
+                <div className="bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-lg shadow">
+                  <div className="text-sm opacity-90">Total Sessions</div>
+                  <div className="text-3xl font-bold mt-2">{reportResult.total_sessions}</div>
+                </div>
+                
+                <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-lg shadow">
+                  <div className="text-sm opacity-90">Section</div>
+                  <div className="text-3xl font-bold mt-2">{reportResult.section_id}</div>
+                </div>
+                
+                <div className="bg-gradient-to-br from-red-500 to-red-600 text-white p-6 rounded-lg shadow">
+                  <div className="text-sm opacity-90">Below Threshold</div>
+                  <div className="text-3xl font-bold mt-2">{belowThresholdCount}</div>
+                </div>
               </div>
-              
-              <div className="bg-gradient-to-br from-purple-500 to-purple-600 text-white p-6 rounded-lg shadow">
-                <div className="text-sm opacity-90">Section</div>
-                <div className="text-3xl font-bold mt-2">{reportResult.section_id}</div>
-              </div>
-              
-              <div className="bg-gradient-to-br from-red-500 to-red-600 text-white p-6 rounded-lg shadow">
-                <div className="text-sm opacity-90">Below Threshold</div>
-                <div className="text-3xl font-bold mt-2">{belowThresholdCount}</div>
-              </div>
-            </div>
+            )}
 
-            {/* Download Buttons */}
-            <div className="flex space-x-2 mb-6">
-              <button
-                onClick={handleDownloadCSV}
-                className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
-              >
-                <Download className="w-4 h-4" />
-                <span>Download CSV</span>
-              </button>
-              <button
-                onClick={handleDownloadExcel}
-                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-              >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Download Excel</span>
-              </button>
-            </div>
+            {/* Download Buttons - Only show when there's data */}
+            {reportResult.total_sessions > 0 && (
+              <div className="flex space-x-2 mb-6">
+                <button
+                  onClick={handleDownloadCSV}
+                  className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Download CSV</span>
+                </button>
+                <button
+                  onClick={handleDownloadExcel}
+                  className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Download Excel</span>
+                </button>
+              </div>
+            )}
 
-            {/* Report Table */}
-            <div className="bg-white rounded-lg shadow overflow-hidden">
+            {/* Report Table - Only show when there's data */}
+            {reportResult.total_sessions > 0 && (
+              <div className="bg-white rounded-lg shadow overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead className="bg-gray-50 border-b">
@@ -532,7 +734,8 @@ export default function InstructorReports() {
                   </div>
                 </div>
               </div>
-            </div>
+              </div>
+            )}
           </>
         )}
 

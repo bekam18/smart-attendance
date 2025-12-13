@@ -31,29 +31,7 @@ def get_profile():
     # Normalize year format (handle "4th Year" vs "4")
     year_normalized = student_year.replace('th Year', '').replace('st Year', '').replace('nd Year', '').replace('rd Year', '').strip()
     
-    # Get all courses from attendance records for this student
-    courses_query = """
-        SELECT DISTINCT course_name 
-        FROM attendance 
-        WHERE student_id = %s AND course_name IS NOT NULL AND course_name != ''
-        ORDER BY course_name
-    """
-    courses_result = db.execute_query(courses_query, (student['student_id'],))
-    courses_from_attendance = [c['course_name'] for c in courses_result] if courses_result else []
-    
-    # Get courses from sessions for this student's year and section
-    sessions_query = """
-        SELECT DISTINCT course_name 
-        FROM sessions 
-        WHERE (year = %s OR year = %s) AND section_id = %s AND course_name IS NOT NULL AND course_name != ''
-        ORDER BY course_name
-    """
-    print(f"DEBUG: Querying sessions with year='{student_year}' or '{year_normalized}', section='{student_section}'")
-    sessions_result = db.execute_query(sessions_query, (student_year, year_normalized, student_section))
-    courses_from_sessions = [s['course_name'] for s in sessions_result] if sessions_result else []
-    print(f"DEBUG: Found {len(courses_from_sessions)} courses from sessions: {courses_from_sessions}")
-    
-    # Get instructors who teach this student's year
+    # Get instructors who teach this student's year and section
     instructor_query = """
         SELECT DISTINCT u.id, u.name, u.course_name, u.sections, u.class_year 
         FROM users u 
@@ -61,7 +39,7 @@ def get_profile():
     """
     instructors_result = db.execute_query(instructor_query, (student_year, year_normalized))
     
-    courses_from_instructors = []
+    assigned_courses = []
     instructors = []
     
     if instructors_result:
@@ -74,32 +52,31 @@ def get_profile():
                     try:
                         sections = json.loads(sections_json) if isinstance(sections_json, str) else sections_json
                         if student_section in sections:
-                            courses_from_instructors.append(course_name)
+                            assigned_courses.append(course_name)
                             instructors.append({
                                 'id': instructor['id'],
                                 'name': instructor['name'],
                                 'course': course_name
                             })
                     except:
-                        # If sections parsing fails, still add the instructor
-                        courses_from_instructors.append(course_name)
-                        instructors.append({
-                            'id': instructor['id'],
-                            'name': instructor['name'],
-                            'course': course_name
-                        })
+                        # If sections parsing fails, don't add the course/instructor
+                        pass
                 else:
                     # If no sections specified, assume instructor teaches all sections
-                    courses_from_instructors.append(course_name)
+                    assigned_courses.append(course_name)
                     instructors.append({
                         'id': instructor['id'],
                         'name': instructor['name'],
                         'course': course_name
                     })
     
-    # Combine courses from all sources and remove duplicates
-    all_courses = list(set(courses_from_attendance + courses_from_sessions + courses_from_instructors))
+    # Remove duplicates and sort courses assigned by admin through instructors
+    all_courses = list(set(assigned_courses))
     all_courses.sort()
+    
+    print(f"DEBUG: Student {student['student_id']} (Year: {student_year}, Section: {student_section})")
+    print(f"DEBUG: Found {len(all_courses)} assigned courses: {all_courses}")
+    print(f"DEBUG: Found {len(instructors)} instructors: {[i['name'] + ' - ' + i['course'] for i in instructors]}")
     
     profile = {
         'id': str(student.get('id', student.get('_id', ''))),

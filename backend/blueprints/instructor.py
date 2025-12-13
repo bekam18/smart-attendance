@@ -689,6 +689,20 @@ def generate_report():
         # Get attendance records
         records = db.execute_query(sql, tuple(params) if params else None)
         
+        # Check if there are any attendance records for the selected period
+        if not records:
+            return jsonify({
+                'report_type': report_type,
+                'section_id': section_id,
+                'course_name': course_name,
+                'start_date': start_date,
+                'end_date': end_date,
+                'total_sessions': 0,
+                'total_students': 0,
+                'data': [],
+                'message': f'No attendance data found for the selected {report_type} period. Please select a different time period with existing attendance sessions.'
+            }), 200
+        
         # Get all students in the section
         student_sql = 'SELECT * FROM students WHERE 1=1'
         student_params = []

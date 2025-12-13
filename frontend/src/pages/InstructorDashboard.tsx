@@ -2,9 +2,52 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { attendanceAPI, instructorAPI } from '../lib/api';
-import { PlayCircle, StopCircle, Clock } from 'lucide-react';
+import { PlayCircle, StopCircle, Clock, AlertCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { Session } from '../types';
+import { 
+  isWithinWorkingHours, 
+  useWorkingHoursStatus, 
+  formatTimeUntil, 
+  getWorkingHoursStatusColor, 
+  getWorkingHoursStatusIcon 
+} from '../utils/timeRestrictions';
+
+// Working Hours Indicator Component
+function WorkingHoursIndicator() {
+  const status = useWorkingHoursStatus();
+  
+  const statusColor = getWorkingHoursStatusColor(status.allowed);
+  const statusIcon = getWorkingHoursStatusIcon(status.allowed);
+  
+  return (
+    <div className={`p-3 rounded-lg border ${statusColor}`}>
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{statusIcon}</span>
+        <div>
+          <div className="font-medium">
+            {status.allowed ? 'System Active' : 'System Blocked'}
+          </div>
+          <div className="text-sm">
+            {status.message}
+          </div>
+          {!status.allowed && status.minutes_until_next && (
+            <div className="text-xs mt-1">
+              Next period in: {formatTimeUntil(status.minutes_until_next)}
+            </div>
+          )}
+        </div>
+      </div>
+      
+      <div className="mt-2 text-xs">
+        <div className="font-medium">Working Hours:</div>
+        <div>Morning: 8:30 AM - 12:30 PM</div>
+        <div>Afternoon: 1:30 PM - 5:30 PM</div>
+        <div className="text-red-600">Lunch Break: 12:30 PM - 1:30 PM (blocked)</div>
+      </div>
+    </div>
+  );
+}
 
 export default function InstructorDashboard() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -16,6 +59,11 @@ export default function InstructorDashboard() {
   const [instructorInfo, setInstructorInfo] = useState<any>(null);
   const [showCustomCourse, setShowCustomCourse] = useState(false);
   const [customCourse, setCustomCourse] = useState('');
+  const [showEndSessionModal, setShowEndSessionModal] = useState(false);
+  const [showRequirementsNotMetModal, setShowRequirementsNotMetModal] = useState(false);
+  const [sessionToEnd, setSessionToEnd] = useState<any>(null);
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [sessionToReopen, setSessionToReopen] = useState<any>(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -46,6 +94,13 @@ export default function InstructorDashboard() {
   const handleCreateSession = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    // Check working hours first
+    const workingHoursCheck = isWithinWorkingHours();
+    if (!workingHoursCheck.allowed) {
+      toast.error(`Cannot create session: ${workingHoursCheck.message}`);
+      return;
+    }
+    
     if (!sessionType) {
       toast.error('Please select a session type');
       return;
@@ -63,6 +118,11 @@ export default function InstructorDashboard() {
     
     if (!instructorInfo?.class_year) {
       toast.error('Your year is not set. Please contact admin.');
+      return;
+    }
+    
+    if (!instructorInfo?.sections || instructorInfo.sections.length === 0) {
+      toast.error('No sections assigned to you. Please contact admin.');
       return;
     }
     
@@ -87,50 +147,115 @@ export default function InstructorDashboard() {
   };
 
   const handleEndSession = async (sessionId: string) => {
-    if (!confirm('End this session permanently for the semester? This cannot be undone.')) {
+    // Find the session to get course details
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) {
+      toast.error('Session not found');
       return;
     }
     
     try {
-      await attendanceAPI.endSession(sessionId, 'semester');
+      // Check semester eligibility first
+      const eligibilityResponse = await attendanceAPI.checkSemesterEligibility({
+        course_name: session.course || '',
+        section_id: session.section_id || '',
+        year: session.year || ''
+      });
+      
+      const eligibility = eligibilityResponse.data;
+      
+      // Store session and eligibility data for modal
+      setSessionToEnd({ session, eligibility });
+      
+      if (!eligibility.can_end_semester) {
+        // Show requirements not met modal
+        setShowRequirementsNotMetModal(true);
+      } else {
+        // Show confirmation modal
+        setShowEndSessionModal(true);
+      }
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || 'Failed to end session';
+      toast.error(errorMessage);
+    }
+  };
+
+  const confirmEndSession = async () => {
+    if (!sessionToEnd) return;
+    
+    setShowEndSessionModal(false);
+    
+    try {
+      await attendanceAPI.endSession(sessionToEnd.session.id, 'semester');
       toast.success('Session ended permanently');
       loadSessions();
-    } catch (error) {
-      toast.error('Failed to end session');
-    }
-  };
-
-  const handleReopenSession = async (sessionId: string) => {
-    if (!confirm('Reopen this session for attendance? Previous attendance records will be preserved.')) {
-      return;
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || 'Failed to end session';
+      toast.error(errorMessage);
     }
     
+    setSessionToEnd(null);
+  };
+
+  const cancelEndSession = () => {
+    setShowEndSessionModal(false);
+    setSessionToEnd(null);
+  };
+
+  const closeRequirementsNotMetModal = () => {
+    setShowRequirementsNotMetModal(false);
+    setSessionToEnd(null);
+  };
+
+  const handleReopenSession = (session: any) => {
+    setSessionToReopen(session);
+    setShowReopenModal(true);
+  };
+
+  const confirmReopenSession = async () => {
+    if (!sessionToReopen) return;
+    
+    setShowReopenModal(false);
+    
     try {
-      await attendanceAPI.reopenSession(sessionId);
+      await attendanceAPI.instructorReopenSession(sessionToReopen.id);
       toast.success('Session reopened successfully');
-      loadSessions();
+      loadSessions(); // Refresh the list
     } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Failed to reopen session');
-    }
-  };
-
-  const handleForceReopenSession = async (sessionId: string) => {
-    if (!confirm('Force reopen this session immediately? This bypasses the 12-hour waiting period. Use only if you accidentally stopped the session.')) {
-      return;
+      const errorData = error.response?.data;
+      
+      if (errorData?.error === 'Time block mismatch') {
+        // Show detailed time block error
+        toast.error(
+          `${errorData.message}\n\nSuggestion: ${errorData.suggestion}`,
+          { duration: 6000 }
+        );
+      } else if (errorData?.error === 'Outside working hours') {
+        // Show working hours error
+        toast.error(
+          `${errorData.message}\n\nWorking Hours: Morning (8:30 AM - 12:30 PM), Afternoon (1:30 PM - 5:30 PM)`,
+          { duration: 6000 }
+        );
+      } else {
+        // Generic error
+        toast.error(errorData?.message || 'Failed to reopen session');
+      }
     }
     
-    try {
-      await attendanceAPI.forceReopenSession(sessionId);
-      toast.success('Session force reopened successfully');
-      loadSessions();
-    } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Failed to force reopen session');
-    }
+    setSessionToReopen(null);
+  };
+
+  const cancelReopenSession = () => {
+    setShowReopenModal(false);
+    setSessionToReopen(null);
   };
 
   return (
     <Layout title="Instructor Dashboard">
       <div className="space-y-6">
+        {/* Working Hours Status */}
+        <WorkingHoursIndicator />
+        
         <div className="flex justify-between items-center">
           <h2 className="text-2xl font-bold">Attendance Sessions</h2>
           <div className="flex space-x-2">
@@ -245,6 +370,21 @@ export default function InstructorDashboard() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Time Block <span className="text-red-500">*</span>
                 </label>
+                {(() => {
+                  const currentTimeCheck = isWithinWorkingHours();
+                  const currentPeriod = currentTimeCheck.period;
+                  
+                  return (
+                    <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm text-blue-800 font-medium">
+                        ℹ️ You can only create sessions for the current time period
+                      </p>
+                      <p className="text-xs text-blue-600 mt-1">
+                        Current period: <strong>{currentPeriod === 'morning' ? 'Morning (8:30 AM - 12:30 PM)' : 'Afternoon (1:30 PM - 5:30 PM)'}</strong>
+                      </p>
+                    </div>
+                  );
+                })()}
                 {sessionType && !timeBlock && (
                   <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                     <p className="text-sm text-yellow-800 font-medium">
@@ -253,36 +393,59 @@ export default function InstructorDashboard() {
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setTimeBlock('morning')}
-                    className={`p-4 border-2 rounded-lg text-center transition ${
-                      timeBlock === 'morning'
-                        ? 'border-orange-600 bg-orange-50 text-orange-900 ring-2 ring-orange-300'
-                        : 'border-gray-300 hover:border-orange-400'
-                    }`}
-                  >
-                    <div className="font-semibold">🌅 Morning</div>
-                    <div className="text-xs text-gray-600 mt-1">8:30 AM - 12:00 PM</div>
-                    {timeBlock === 'morning' && (
-                      <div className="mt-2 text-orange-600">✓ Selected</div>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTimeBlock('afternoon')}
-                    className={`p-4 border-2 rounded-lg text-center transition ${
-                      timeBlock === 'afternoon'
-                        ? 'border-indigo-600 bg-indigo-50 text-indigo-900 ring-2 ring-indigo-300'
-                        : 'border-gray-300 hover:border-indigo-400'
-                    }`}
-                  >
-                    <div className="font-semibold">🌆 Afternoon</div>
-                    <div className="text-xs text-gray-600 mt-1">1:30 PM - 5:00 PM</div>
-                    {timeBlock === 'afternoon' && (
-                      <div className="mt-2 text-indigo-600">✓ Selected</div>
-                    )}
-                  </button>
+                  {(() => {
+                    const currentTimeCheck = isWithinWorkingHours();
+                    const currentPeriod = currentTimeCheck.period;
+                    const isMorningAllowed = currentPeriod === 'morning';
+                    const isAfternoonAllowed = currentPeriod === 'afternoon';
+                    
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => isMorningAllowed ? setTimeBlock('morning') : toast.error('Morning sessions can only be created during morning hours (8:30 AM - 12:30 PM)')}
+                          disabled={!isMorningAllowed}
+                          className={`p-4 border-2 rounded-lg text-center transition ${
+                            timeBlock === 'morning'
+                              ? 'border-orange-600 bg-orange-50 text-orange-900 ring-2 ring-orange-300'
+                              : isMorningAllowed
+                                ? 'border-gray-300 hover:border-orange-400'
+                                : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <div className="font-semibold">🌅 Morning</div>
+                          <div className="text-xs mt-1">8:30 AM - 12:30 PM</div>
+                          {timeBlock === 'morning' && (
+                            <div className="mt-2 text-orange-600">✓ Selected</div>
+                          )}
+                          {!isMorningAllowed && (
+                            <div className="mt-2 text-red-500 text-xs">❌ Not available now</div>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => isAfternoonAllowed ? setTimeBlock('afternoon') : toast.error('Afternoon sessions can only be created during afternoon hours (1:30 PM - 5:30 PM)')}
+                          disabled={!isAfternoonAllowed}
+                          className={`p-4 border-2 rounded-lg text-center transition ${
+                            timeBlock === 'afternoon'
+                              ? 'border-indigo-600 bg-indigo-50 text-indigo-900 ring-2 ring-indigo-300'
+                              : isAfternoonAllowed
+                                ? 'border-gray-300 hover:border-indigo-400'
+                                : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <div className="font-semibold">🌆 Afternoon</div>
+                          <div className="text-xs mt-1">1:30 PM - 5:30 PM</div>
+                          {timeBlock === 'afternoon' && (
+                            <div className="mt-2 text-indigo-600">✓ Selected</div>
+                          )}
+                          {!isAfternoonAllowed && (
+                            <div className="mt-2 text-red-500 text-xs">❌ Not available now</div>
+                          )}
+                        </button>
+                      </>
+                    );
+                  })()}
                 </div>
               </div>
               
@@ -290,18 +453,25 @@ export default function InstructorDashboard() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Section <span className="text-red-500">*</span>
                 </label>
-                <select
-                  value={section}
-                  onChange={(e) => setSection(e.target.value)}
-                  className="w-full px-4 py-2 border rounded-lg"
-                  required
-                >
-                  <option value="">Select Section...</option>
-                  <option value="A">Section A</option>
-                  <option value="B">Section B</option>
-                  <option value="C">Section C</option>
-                  <option value="D">Section D</option>
-                </select>
+                {instructorInfo?.sections && instructorInfo.sections.length > 0 ? (
+                  <select
+                    value={section}
+                    onChange={(e) => setSection(e.target.value)}
+                    className="w-full px-4 py-2 border rounded-lg"
+                    required
+                  >
+                    <option value="">Select Section...</option>
+                    {instructorInfo.sections.map((sectionId: string) => (
+                      <option key={sectionId} value={sectionId}>
+                        Section {sectionId}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="w-full px-4 py-2 border rounded-lg bg-gray-100 text-gray-500">
+                    No sections assigned. Please contact admin to assign sections.
+                  </div>
+                )}
               </div>
               
               <div>
@@ -430,7 +600,7 @@ export default function InstructorDashboard() {
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       session.status === 'active' 
                         ? 'bg-green-100 text-green-800' 
-                        : session.status === 'stopped_daily'
+                        : (session.status === 'stopped_daily' || session.status === 'completed')
                         ? 'bg-orange-100 text-orange-800'
                         : session.status === 'ended_semester'
                         ? 'bg-red-100 text-red-800'
@@ -438,6 +608,7 @@ export default function InstructorDashboard() {
                     }`}>
                       {session.status === 'active' ? '🟢 Active' :
                        session.status === 'stopped_daily' ? '🟠 Stopped (Daily)' :
+                       session.status === 'completed' ? '🟠 Stopped (Daily)' :
                        session.status === 'ended_semester' ? '🔴 Ended (Semester)' :
                        session.status}
                     </span>
@@ -462,36 +633,14 @@ export default function InstructorDashboard() {
                         <span>End</span>
                       </button>
                     </>
-                  ) : session.can_reopen ? (
+                  ) : (session.status === 'stopped_daily' || session.status === 'completed') ? (
                     <>
                       <button
-                        onClick={() => handleReopenSession(session.id)}
-                        className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                        onClick={() => handleReopenSession(session)}
+                        className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
                       >
-                        🔄 Reopen Session
-                      </button>
-                      <button
-                        onClick={() => navigate(`/instructor/session/${session.id}`)}
-                        className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
-                      >
-                        View Details
-                      </button>
-                    </>
-                  ) : session.hours_until_reopen !== null && session.hours_until_reopen !== undefined ? (
-                    <>
-                      <button
-                        disabled
-                        className="px-4 py-2 bg-gray-400 text-white rounded-lg cursor-not-allowed"
-                        title={`Can reopen in ${session.hours_until_reopen.toFixed(1)} hours`}
-                      >
-                        ⏳ Reopen in {session.hours_until_reopen.toFixed(1)}h
-                      </button>
-                      <button
-                        onClick={() => handleForceReopenSession(session.id)}
-                        className="px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm"
-                        title="Force reopen immediately (use if accidentally stopped)"
-                      >
-                        🚨Reopen
+                        <PlayCircle className="w-4 h-4" />
+                        <span>Reopen</span>
                       </button>
                       <button
                         onClick={() => navigate(`/instructor/session/${session.id}`)}
@@ -520,6 +669,178 @@ export default function InstructorDashboard() {
           )}
         </div>
       </div>
+
+      {/* End Session Confirmation Modal */}
+      {showEndSessionModal && sessionToEnd && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <AlertCircle className="w-6 h-6 text-red-600" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  End Session Permanently
+                </h3>
+              </div>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-gray-700 mb-3">
+                Are you sure you want to end this session permanently for the semester?
+              </p>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+                <p className="text-sm text-red-800 font-medium mb-2">
+                  ⚠️ This action cannot be undone!
+                </p>
+              </div>
+              
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                <p className="text-sm text-green-800 font-medium mb-2">
+                  ✅ Requirements Met:
+                </p>
+                <ul className="text-sm text-green-700 space-y-1">
+                  <li>• {sessionToEnd.eligibility.months_elapsed} months elapsed (need 4+)</li>
+                  <li>• {sessionToEnd.eligibility.sessions_conducted} sessions conducted (need 8+)</li>
+                </ul>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelEndSession}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmEndSession}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+              >
+                End Session Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Requirements Not Met Modal */}
+      {showRequirementsNotMetModal && sessionToEnd && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <AlertCircle className="w-6 h-6 text-red-600" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Cannot End Session
+                </h3>
+              </div>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-gray-700 mb-3">
+                You have not fulfilled the requirements to end the session for the semester.
+              </p>
+              
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-4">
+                <p className="text-sm text-red-800 font-medium mb-2">
+                  ❌ Requirements Not Met:
+                </p>
+                <ul className="text-sm text-red-700 space-y-1">
+                  {sessionToEnd.eligibility.days_remaining > 0 && (
+                    <li>• Need {sessionToEnd.eligibility.days_remaining} more days (currently {sessionToEnd.eligibility.days_elapsed} days, need 120+ days)</li>
+                  )}
+                  {sessionToEnd.eligibility.sessions_remaining > 0 && (
+                    <li>• Need {sessionToEnd.eligibility.sessions_remaining} more sessions (currently {sessionToEnd.eligibility.sessions_conducted} sessions, need 8+ sessions)</li>
+                  )}
+                </ul>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-sm text-blue-800 font-medium mb-2">
+                  📋 Current Progress:
+                </p>
+                <ul className="text-sm text-blue-700 space-y-1">
+                  <li>• Time elapsed: {sessionToEnd.eligibility.months_elapsed} months ({sessionToEnd.eligibility.days_elapsed} days)</li>
+                  <li>• Sessions conducted: {sessionToEnd.eligibility.sessions_conducted}</li>
+                </ul>
+              </div>
+            </div>
+            
+            <div className="flex justify-end">
+              <button
+                onClick={closeRequirementsNotMetModal}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                Understood
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reopen Session Confirmation Modal */}
+      {showReopenModal && sessionToReopen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                <PlayCircle className="w-6 h-6 text-green-600" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Reopen Session
+                </h3>
+              </div>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-gray-700 mb-3">
+                Are you sure you want to reopen session <strong>"{sessionToReopen.course} - {sessionToReopen.session_type}"</strong>?
+              </p>
+              <div className="bg-green-50 border border-green-200 rounded-lg p-3 mb-3">
+                <p className="text-sm text-green-800">
+                  <strong>✅ This will:</strong>
+                </p>
+                <ul className="text-sm text-green-700 mt-2 space-y-1">
+                  <li>• Reactivate the session for attendance taking</li>
+                  <li>• Allow you to continue using the camera</li>
+                  <li>• Enable face recognition for this session</li>
+                </ul>
+              </div>
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p className="text-sm text-yellow-800">
+                  <strong>⏰ Time Block Restriction:</strong> Sessions can only be reopened during their original time period.
+                </p>
+                <ul className="text-sm text-yellow-700 mt-2 space-y-1">
+                  <li>• Morning sessions: 8:30 AM - 12:30 PM</li>
+                  <li>• Afternoon sessions: 1:30 PM - 5:30 PM</li>
+                </ul>
+                <p className="text-sm text-yellow-700 mt-2">
+                  <strong>Current session:</strong> {sessionToReopen.time_block} session
+                </p>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelReopenSession}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmReopenSession}
+                className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition"
+              >
+                Reopen Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

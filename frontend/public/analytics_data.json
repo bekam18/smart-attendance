@@ -1,0 +1,208 @@
+{
+  "section_attendance": [
+    {
+      "section": "A",
+      "total_records": 76,
+      "present_count": "59",
+      "absent_count": "17",
+      "attendance_percentage": 77.63
+    },
+    {
+      "section": "B",
+      "total_records": 76,
+      "present_count": "56",
+      "absent_count": "20",
+      "attendance_percentage": 73.68
+    }
+  ],
+  "daily_attendance": [
+    {
+      "date": "2025-12-13",
+      "present": "115",
+      "absent": "37",
+      "total": 152
+    }
+  ],
+  "course_performance": [
+    {
+      "course_name": "Physics",
+      "unique_students": 19,
+      "present_count": "31",
+      "absent_count": "7",
+      "attendance_percentage": 81.58
+    },
+    {
+      "course_name": "Chemistry",
+      "unique_students": 19,
+      "present_count": "30",
+      "absent_count": "8",
+      "attendance_percentage": 78.95
+    },
+    {
+      "course_name": "Computer Science",
+      "unique_students": 19,
+      "present_count": "27",
+      "absent_count": "11",
+      "attendance_percentage": 71.05
+    },
+    {
+      "course_name": "Mathematics",
+      "unique_students": 19,
+      "present_count": "27",
+      "absent_count": "11",
+      "attendance_percentage": 71.05
+    }
+  ],
+  "time_block_analysis": [
+    {
+      "time_block": "morning",
+      "present_count": "54",
+      "absent_count": "22",
+      "total_records": 76,
+      "attendance_percentage": 71.05
+    },
+    {
+      "time_block": "afternoon",
+      "present_count": "61",
+      "absent_count": "15",
+      "total_records": 76,
+      "attendance_percentage": 80.26
+    }
+  ],
+  "instructor_performance": [],
+  "monthly_attendance": [
+    {
+      "month": "2025-12",
+      "month_name": "December",
+      "year": 2025,
+      "present_count": "115",
+      "absent_count": "37",
+      "total_records": 152,
+      "attendance_percentage": 75.66,
+      "unique_students": 19,
+      "total_sessions": 8,
+      "display_name": "December 2025"
+    }
+  ],
+  "instructor_activity": [],
+  "session_type_comparison": [],
+  "recent_instructor_sessions": [
+    {
+      "session_id": 8,
+      "session_name": "Chemistry - Section B - Afternoon",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:36",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "15",
+      "absent_count": "4",
+      "attendance_percentage": 78.95
+    },
+    {
+      "session_id": 1,
+      "session_name": "Computer Science - Section A - Morning",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "14",
+      "absent_count": "5",
+      "attendance_percentage": 73.68
+    },
+    {
+      "session_id": 2,
+      "session_name": "Computer Science - Section B - Morning",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "13",
+      "absent_count": "6",
+      "attendance_percentage": 68.42
+    },
+    {
+      "session_id": 3,
+      "session_name": "Mathematics - Section A - Morning",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "14",
+      "absent_count": "5",
+      "attendance_percentage": 73.68
+    },
+    {
+      "session_id": 4,
+      "session_name": "Mathematics - Section B - Morning",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "13",
+      "absent_count": "6",
+      "attendance_percentage": 68.42
+    },
+    {
+      "session_id": 5,
+      "session_name": "Physics - Section A - Afternoon",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "16",
+      "absent_count": "3",
+      "attendance_percentage": 84.21
+    },
+    {
+      "session_id": 6,
+      "session_name": "Physics - Section B - Afternoon",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "15",
+      "absent_count": "4",
+      "attendance_percentage": 78.95
+    },
+    {
+      "session_id": 7,
+      "session_name": "Chemistry - Section A - Afternoon",
+      "course_name": null,
+      "session_type": null,
+      "time_block": null,
+      "start_time": "2025-12-13T16:11:35",
+      "session_status": "completed",
+      "instructor_name": "System Administrator",
+      "total_attendance": 19,
+      "present_count": "15",
+      "absent_count": "4",
+      "attendance_percentage": 78.95
+    }
+  ],
+  "metadata": {
+    "generated_at": "2025-12-13T16:33:06.453426",
+    "total_records": 18,
+    "data_source": "real_database"
+  }
+}

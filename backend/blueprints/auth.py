@@ -5,20 +5,18 @@ from datetime import datetime
 from db.mysql import get_db
 from utils.security import hash_password, verify_password
 # from utils.secure_db import get_secure_db
-from middleware.simple_security import (
-    validate_request_security,
-    validate_json_fields,
-    audit_log_simple,
-    validate_username_format,
-    validate_email_format
+from middleware.working_security import (
+    working_security_check,
+    working_json_validation,
+    working_audit_log
 )
 
 auth_bp = Blueprint('auth', __name__)
 
 @auth_bp.route('/login', methods=['POST'])
-@validate_request_security
-@validate_json_fields(required_fields=['username', 'password'])
-@audit_log_simple('LOGIN_ATTEMPT')
+@working_security_check
+@working_json_validation(required_fields=['username', 'password'])
+@working_audit_log('LOGIN_ATTEMPT')
 def login():
     """Login endpoint for all user roles"""
     # Get validated and sanitized data from middleware
@@ -87,9 +85,9 @@ def login():
     }), 200
 
 @auth_bp.route('/register-student', methods=['POST'])
-@validate_request_security
-@validate_json_fields(required_fields=['username', 'password', 'email', 'name', 'student_id'])
-@audit_log_simple('STUDENT_REGISTRATION')
+@working_security_check
+@working_json_validation(required_fields=['username', 'password', 'email', 'name', 'student_id'])
+@working_audit_log('STUDENT_REGISTRATION')
 def register_student():
     """Register a new student (can be called by admin or self-registration)"""
     data = getattr(request, 'validated_data', None) or request.get_json()
@@ -174,13 +172,50 @@ import secrets
 from datetime import timedelta
 from utils.email_service import email_service
 
-# Store reset tokens in memory (in production, use Redis or database)
-reset_tokens = {}
+# Database-based token storage (replaces in-memory storage)
+def store_reset_token(token, user_id, email, expires_at):
+    """Store reset token in database"""
+    db = get_db()
+    db.execute_query(
+        """INSERT INTO password_reset_tokens (token, user_id, email, expires_at) 
+           VALUES (%s, %s, %s, %s)""",
+        (token, user_id, email, expires_at),
+        fetch=False
+    )
+
+def get_reset_token(token):
+    """Get reset token from database"""
+    db = get_db()
+    result = db.execute_query(
+        """SELECT * FROM password_reset_tokens 
+           WHERE token = %s AND expires_at > NOW() AND used = FALSE""",
+        (token,)
+    )
+    return result[0] if result else None
+
+def mark_token_used(token):
+    """Mark token as used"""
+    db = get_db()
+    db.execute_query(
+        """UPDATE password_reset_tokens 
+           SET used = TRUE WHERE token = %s""",
+        (token,),
+        fetch=False
+    )
+
+def cleanup_expired_tokens():
+    """Clean up expired tokens"""
+    db = get_db()
+    db.execute_query(
+        """DELETE FROM password_reset_tokens 
+           WHERE expires_at < NOW() OR used = TRUE""",
+        fetch=False
+    )
 
 @auth_bp.route('/forgot-password', methods=['POST'])
-@validate_request_security
-@validate_json_fields(required_fields=['email'])
-@audit_log_simple('PASSWORD_RESET_REQUEST')
+@working_security_check
+@working_json_validation(required_fields=['email'])
+@working_audit_log('PASSWORD_RESET_REQUEST')
 def forgot_password():
     """Request password reset - sends email with reset token"""
     try:
@@ -206,30 +241,46 @@ def forgot_password():
         # Generate reset token
         reset_token = secrets.token_urlsafe(32)
         
-        # Store token with expiration (1 hour)
-        reset_tokens[reset_token] = {
-            'user_id': user['id'],
-            'email': email,
-            'expires_at': datetime.now() + timedelta(hours=1)
-        }
+        # Store token in database with expiration (1 hour)
+        expires_at = datetime.now() + timedelta(hours=1)
+        store_reset_token(reset_token, user['id'], email, expires_at)
         
         # Send email
-        email_sent = email_service.send_password_reset_email(
-            to_email=email,
-            reset_token=reset_token,
-            user_name=user['name']
-        )
+        print(f"🔍 Email service configuration check:")
+        print(f"   SMTP Server: {email_service.smtp_server}")
+        print(f"   SMTP Username: {email_service.smtp_username}")
+        print(f"   Is Configured: {email_service.is_configured}")
         
-        if email_sent:
-            print(f"✅ Password reset email sent to: {email}")
-        else:
-            print(f"⚠️  Failed to send password reset email to: {email}")
+        try:
+            email_sent = email_service.send_password_reset_email(
+                to_email=email,
+                reset_token=reset_token,
+                user_name=user['name']
+            )
+            
+            if email_sent:
+                print(f"✅ Password reset email sent to: {email}")
+                return jsonify({
+                    'message': 'If an account exists with this email, a password reset link has been sent.'
+                }), 200
+            else:
+                print(f"⚠️  Email service not configured - using development mode")
+                print(f"🔗 Reset token (for testing): {reset_token}")
+                return jsonify({
+                    'message': 'If an account exists with this email, a password reset link has been sent.',
+                    'token': reset_token,  # Include token for development/testing
+                    'reset_link': f"{email_service.frontend_url}/reset-password?token={reset_token}"
+                }), 200
+                
+        except Exception as email_error:
+            print(f"❌ Email sending error: {email_error}")
             print(f"🔗 Reset token (for testing): {reset_token}")
-        
-        return jsonify({
-            'message': 'If an account exists with this email, a password reset link has been sent.',
-            'token': reset_token if not email_service.smtp_username else None  # Only for development
-        }), 200
+            return jsonify({
+                'message': 'If an account exists with this email, a password reset link has been sent.',
+                'token': reset_token,  # Include token for development/testing
+                'reset_link': f"{email_service.frontend_url}/reset-password?token={reset_token}",
+                'note': 'Email service unavailable - use the provided token for testing'
+            }), 200
         
     except Exception as e:
         print(f"❌ Error in forgot_password: {e}")
@@ -237,9 +288,9 @@ def forgot_password():
 
 
 @auth_bp.route('/reset-password', methods=['POST'])
-@validate_request_security
-@validate_json_fields(required_fields=['token', 'password'])
-@audit_log_simple('PASSWORD_RESET')
+@working_security_check
+@working_json_validation(required_fields=['token', 'password'])
+@working_audit_log('PASSWORD_RESET')
 def reset_password():
     """Reset password using token"""
     try:
@@ -255,15 +306,9 @@ def reset_password():
             return jsonify({'error': 'Password must be at least 6 characters'}), 400
         
         # Check if token exists and is valid
-        if token not in reset_tokens:
+        token_data = get_reset_token(token)
+        if not token_data:
             return jsonify({'error': 'Invalid or expired reset token'}), 400
-        
-        token_data = reset_tokens[token]
-        
-        # Check if token has expired
-        if datetime.now() > token_data['expires_at']:
-            del reset_tokens[token]
-            return jsonify({'error': 'Reset token has expired'}), 400
         
         # Update password
         db = get_db()
@@ -274,8 +319,8 @@ def reset_password():
             (hashed_password, token_data['user_id'])
         )
         
-        # Delete used token
-        del reset_tokens[token]
+        # Mark token as used
+        mark_token_used(token)
         
         print(f"✅ Password reset successful for user ID: {token_data['user_id']}")
         
@@ -289,9 +334,9 @@ def reset_password():
 
 
 @auth_bp.route('/verify-reset-token', methods=['POST'])
-@validate_request_security
-@validate_json_fields(required_fields=['token'])
-@audit_log_simple('TOKEN_VERIFICATION')
+@working_security_check
+@working_json_validation(required_fields=['token'])
+@working_audit_log('TOKEN_VERIFICATION')
 def verify_reset_token():
     """Verify if a reset token is valid"""
     try:
@@ -301,14 +346,18 @@ def verify_reset_token():
         if not token:
             return jsonify({'valid': False, 'error': 'Token is required'}), 400
         
-        if token not in reset_tokens:
-            return jsonify({'valid': False, 'error': 'Invalid token'}), 400
+        # Check token in database
+        db = get_db()
+        result = db.execute_query(
+            """SELECT * FROM password_reset_tokens 
+               WHERE token = %s AND expires_at > NOW() AND used = FALSE""",
+            (token,)
+        )
         
-        token_data = reset_tokens[token]
+        if not result:
+            return jsonify({'valid': False, 'error': 'Invalid or expired token'}), 400
         
-        if datetime.now() > token_data['expires_at']:
-            del reset_tokens[token]
-            return jsonify({'valid': False, 'error': 'Token has expired'}), 400
+        token_data = result[0]
         
         return jsonify({
             'valid': True,
@@ -317,4 +366,6 @@ def verify_reset_token():
         
     except Exception as e:
         print(f"❌ Error in verify_reset_token: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'valid': False, 'error': 'Failed to verify token'}), 500

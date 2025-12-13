@@ -20,6 +20,7 @@ interface Instructor {
   email: string;
   department: string;
   courses: string[];
+  sections: string[];
   class_year: string;
   session_types: string[];
   enabled: boolean;
@@ -31,6 +32,8 @@ export default function AdminInstructors() {
   const [loading, setLoading] = useState(true);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingInstructor, setEditingInstructor] = useState<Instructor | null>(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [instructorToDelete, setInstructorToDelete] = useState<{id: string, name: string} | null>(null);
   
   const [formData, setFormData] = useState({
     username: '',
@@ -40,6 +43,7 @@ export default function AdminInstructors() {
     department: '',
     class_year: '1',
     courses: [] as string[],
+    sections: [] as string[],
     lab_session: false,
     theory_session: true
   });
@@ -52,7 +56,9 @@ export default function AdminInstructors() {
     try {
       setLoading(true);
       const response = await adminAPI.getInstructors();
-      setInstructors(response.data);
+      // Extract instructors array from the response
+      const instructorsData = response.data.instructors || [];
+      setInstructors(instructorsData);
     } catch (error) {
       toast.error('Failed to load instructors');
     } finally {
@@ -109,22 +115,37 @@ export default function AdminInstructors() {
       department: instructor.department,
       class_year: instructor.class_year || '1',
       courses: instructor.courses || [],
+      sections: instructor.sections || [],
       lab_session: instructor.session_types?.includes('lab') || false,
       theory_session: instructor.session_types?.includes('theory') || true
     });
     setShowAddForm(true);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this instructor?')) return;
+  const handleDelete = (id: string, name: string) => {
+    setInstructorToDelete({ id, name });
+    setShowDeleteModal(true);
+  };
+
+  const confirmDeleteInstructor = async () => {
+    if (!instructorToDelete) return;
+    
+    setShowDeleteModal(false);
     
     try {
-      await adminAPI.deleteInstructor(id);
+      await adminAPI.deleteInstructor(instructorToDelete.id);
       toast.success('Instructor deleted successfully');
       loadInstructors();
     } catch (error) {
       toast.error('Failed to delete instructor');
     }
+    
+    setInstructorToDelete(null);
+  };
+
+  const cancelDeleteInstructor = () => {
+    setShowDeleteModal(false);
+    setInstructorToDelete(null);
   };
 
   const handleToggle = async (id: string) => {
@@ -146,6 +167,7 @@ export default function AdminInstructors() {
       department: '',
       class_year: '1',
       courses: [],
+      sections: [],
       lab_session: false,
       theory_session: true
     });
@@ -342,6 +364,59 @@ export default function AdminInstructors() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Assign Sections <span className="text-red-500">*</span>
+                </label>
+                <div className="border rounded-lg p-4 bg-gray-50">
+                  <div className="grid grid-cols-5 gap-3">
+                    {['A', 'B', 'C', 'D', 'E'].map((section) => (
+                      <label
+                        key={section}
+                        className="flex items-center space-x-2 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={formData.sections.includes(section)}
+                          onChange={(e) => {
+                            const newSections = e.target.checked
+                              ? [...formData.sections, section]
+                              : formData.sections.filter(s => s !== section);
+                            setFormData({ ...formData, sections: newSections });
+                          }}
+                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">
+                          Section {section}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  
+                  {formData.sections.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-gray-200">
+                      <p className="text-xs font-medium text-gray-600 mb-2">Selected Sections:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {formData.sections.map((section) => (
+                          <span
+                            key={section}
+                            className="inline-flex items-center px-3 py-1 bg-blue-600 text-white rounded-full text-sm font-medium"
+                          >
+                            Section {section}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {formData.sections.length === 0 && (
+                    <p className="text-sm text-gray-500 italic mt-3">
+                      Select one or more sections to assign to this instructor
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <div className="flex space-x-3 pt-4">
                 <button
                   type="submit"
@@ -457,7 +532,7 @@ export default function AdminInstructors() {
                             {instructor.enabled ? <PowerOff className="w-4 h-4" /> : <Power className="w-4 h-4" />}
                           </button>
                           <button
-                            onClick={() => handleDelete(instructor.id)}
+                            onClick={() => handleDelete(instructor.id, instructor.name)}
                             className="text-red-600 hover:text-red-900"
                             title="Delete"
                           >
@@ -473,6 +548,55 @@ export default function AdminInstructors() {
           )}
         </div>
       </div>
+
+      {/* Delete Instructor Confirmation Modal */}
+      {showDeleteModal && instructorToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-red-100 rounded-full flex items-center justify-center">
+                <Trash2 className="w-6 h-6 text-red-600" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Delete Instructor
+                </h3>
+              </div>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-gray-700 mb-3">
+                Are you sure you want to delete instructor <strong>"{instructorToDelete.name}"</strong>?
+              </p>
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <p className="text-sm text-red-800">
+                  <strong>⚠️ This action cannot be undone!</strong>
+                </p>
+                <ul className="text-sm text-red-700 mt-2 space-y-1">
+                  <li>• All instructor data will be permanently deleted</li>
+                  <li>• Associated sessions will remain but lose instructor link</li>
+                  <li>• Login access will be immediately revoked</li>
+                </ul>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelDeleteInstructor}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteInstructor}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
+              >
+                Delete Instructor
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
   );
 }

@@ -25,9 +25,9 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=int(os.getenv('JWT_EXPIRY_HOURS', '168')))  # 7 days default
     
     # Recognition
-    # Threshold set to 0.60 to accept faces with confidence 0.60+
-    # This allows recognition of faces with confidence like 0.68, 0.82, etc.
-    RECOGNITION_CONFIDENCE_THRESHOLD = 0.60
+    # Threshold set to 0.75 to accept faces with confidence 0.75+
+    # This reduces false positives and improves accuracy
+    RECOGNITION_CONFIDENCE_THRESHOLD = 0.75
     MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'Classifier')
     
     # Upload

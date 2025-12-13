@@ -15,12 +15,13 @@ from blueprints.debug import debug_bp
 from blueprints.instructor import instructor_bp
 
 # Import security middleware
-# try:
-#     from middleware.simple_security import validate_request_security
-#     SECURITY_AVAILABLE = True
-# except ImportError:
-#     SECURITY_AVAILABLE = False
-#     print("⚠️  Security middleware not available")
+try:
+    from middleware.working_security import working_security_check, working_audit_log
+    SECURITY_AVAILABLE = True
+    print("✅ Security middleware loaded successfully")
+except ImportError as e:
+    SECURITY_AVAILABLE = False
+    print(f"⚠️  Security middleware not available: {e}")
 
 def create_app():
     app = Flask(__name__)
@@ -69,14 +70,28 @@ def create_app():
     # JWT
     jwt = JWTManager(app)
     
-    # Security headers
+    # Security headers and middleware
     @app.after_request
     def after_request(response):
-        # Add basic security headers
+        # Add comprehensive security headers
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['X-XSS-Protection'] = '1; mode=block'
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+        response.headers['Referrer-Policy'] = 'strict-origin-when-cross-origin'
+        response.headers['Permissions-Policy'] = 'geolocation=(), microphone=(), camera=()'
         return response
+    
+    # Apply security middleware to all API routes
+    if SECURITY_AVAILABLE:
+        @app.before_request
+        def security_check():
+            # Apply security validation to all API routes
+            if request.path.startswith('/api/'):
+                return working_security_check(lambda: None)()
+        
+        print("✅ Security middleware applied to all API routes")
     
     # Add error handlers for better debugging
     @app.errorhandler(Exception)
@@ -97,20 +112,37 @@ def create_app():
     os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
     os.makedirs(config.MODEL_PATH, exist_ok=True)
     
-    # Request logging (disabled in production)
-    # @app.before_request
-    # def log_request():
-    #     print(f"🌐 REQUEST: {request.method} {request.path}")
-    #     if request.is_json:
-    #         print(f"   JSON: {request.get_json()}")
+    # Request logging (enabled for debugging)
+    @app.before_request
+    def log_request():
+        print(f"🌐 REQUEST: {request.method} {request.path}")
+        if request.is_json:
+            print(f"   JSON: {request.get_json()}")
+        import sys
+        sys.stdout.flush()
     
     # Register blueprints
+    print("🔧 Registering blueprints...")
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
+    print("✅ Auth blueprint registered")
     app.register_blueprint(admin_bp, url_prefix='/api/admin')
+    print("✅ Admin blueprint registered")
     app.register_blueprint(students_bp, url_prefix='/api/students')
+    print("✅ Students blueprint registered")
     app.register_blueprint(attendance_bp, url_prefix='/api/attendance')
+    print("✅ Attendance blueprint registered")
     app.register_blueprint(instructor_bp, url_prefix='/api/instructor')
+    print("✅ Instructor blueprint registered")
     app.register_blueprint(debug_bp, url_prefix='/api/debug')
+    print("✅ Debug blueprint registered")
+    
+    # Debug: Print all registered routes
+    print(f"\n📋 Total routes registered: {len(list(app.url_map.iter_rules()))}")
+    analytics_routes = [rule for rule in app.url_map.iter_rules() if 'analytics' in rule.rule]
+    print(f"📊 Analytics routes: {len(analytics_routes)}")
+    for route in analytics_routes:
+        print(f"   {route.rule}")
+    print()
     
     # Health check
     @app.route('/health')

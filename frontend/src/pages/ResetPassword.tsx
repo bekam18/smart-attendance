@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Lock, CheckCircle, AlertCircle, ArrowLeft, Scan } from 'lucide-react';
+import { Lock, CheckCircle, AlertCircle, ArrowLeft } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { authAPI } from '../lib/api';

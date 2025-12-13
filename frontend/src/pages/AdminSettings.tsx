@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { adminAPI } from '../lib/api';
-import { Save, Settings as SettingsIcon, Activity, ArrowLeft } from 'lucide-react';
+import { Save, Settings as SettingsIcon, ArrowLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function AdminSettings() {

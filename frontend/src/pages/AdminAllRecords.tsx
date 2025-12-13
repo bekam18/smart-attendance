@@ -52,7 +52,7 @@ export default function AdminAllRecords() {
       
       setRecords(recordsRes.data);
       setStudents(studentsRes.data);
-      setInstructors(instructorsRes.data);
+      setInstructors(instructorsRes.data.instructors || []);
     } catch (error) {
       toast.error('Failed to load data');
       console.error(error);

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import { adminAPI } from '../lib/api';
-import { UserPlus, Edit2, Trash2, Power, PowerOff, ArrowLeft, CheckCircle, XCircle } from 'lucide-react';
+import { UserPlus, Edit2, Power, PowerOff, ArrowLeft, CheckCircle, XCircle } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface Student {
@@ -85,17 +85,7 @@ export default function AdminStudents() {
     setShowAddForm(true);
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this student?')) return;
-    
-    try {
-      await adminAPI.deleteStudent(id);
-      toast.success('Student deleted successfully');
-      loadStudents();
-    } catch (error) {
-      toast.error('Failed to delete student');
-    }
-  };
+
 
   const handleToggle = async (id: string) => {
     try {

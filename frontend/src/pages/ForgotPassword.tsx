@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mail, ArrowLeft, CheckCircle, Scan } from 'lucide-react';
+import { Mail, ArrowLeft, CheckCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import { authAPI } from '../lib/api';

@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta
 import logging
 import traceback
 import sys
+import os
 import base64
 import io
 from PIL import Image
@@ -16,6 +17,8 @@ import numpy as np
 
 from db.mysql import get_db
 from utils.security import role_required
+from utils.timezone_helper import get_ethiopian_time, convert_utc_to_ethiopian, format_time_for_display
+from middleware.working_security import working_security_check, working_audit_log
 
 attendance_bp = Blueprint('attendance', __name__)
 logger = logging.getLogger(__name__)
@@ -174,6 +177,8 @@ def detect_face():
 
 
 @attendance_bp.route('/recognize', methods=['POST'])
+@working_security_check
+@working_audit_log('FACE_RECOGNITION')
 @jwt_required()
 @role_required('instructor')
 def recognize_face():
@@ -190,6 +195,33 @@ def recognize_face():
     - 404: Session not found
     - 500: Server error
     """
+    
+    # ============================================================
+    # WORKING HOURS VALIDATION
+    # ============================================================
+    import sys
+    import os
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    from utils.time_restrictions import is_within_working_hours
+    
+    time_check = is_within_working_hours()
+    
+    if not time_check['allowed']:
+        print(f"🚫 BLOCKED: Outside working hours - {time_check['message']}")
+        return jsonify({
+            'status': 'time_blocked',
+            'message': time_check['message'],
+            'current_time': time_check['current_time'],
+            'next_period': time_check['next_period'],
+            'minutes_until_next': time_check.get('minutes_until_next', 0),
+            'working_hours': {
+                'morning': '8:30 AM - 12:30 PM',
+                'afternoon': '1:30 PM - 5:30 PM',
+                'lunch_break': '12:30 PM - 1:30 PM (blocked)'
+            }
+        }), 403
+    
+    print(f"✅ WORKING HOURS OK: {time_check['message']}")
     
     # Log request
     print("\n" + "="*80)
@@ -286,6 +318,34 @@ def recognize_face():
             }), 400
         
         print("✓ Session validated")
+        
+        # ============================================================
+        # TIME BLOCK VALIDATION - Match session time_block to current period
+        # ============================================================
+        session_time_block = session.get('time_block')  # 'morning' or 'afternoon'
+        current_period = time_check.get('period')  # 'morning' or 'afternoon'
+        
+        if session_time_block and session_time_block != current_period:
+            period_names = {
+                'morning': 'Morning (8:30 AM - 12:30 PM)',
+                'afternoon': 'Afternoon (1:30 PM - 5:30 PM)'
+            }
+            
+            print(f"🚫 TIME BLOCK MISMATCH: {session_time_block} session during {current_period} hours")
+            return jsonify({
+                'status': 'time_block_mismatch',
+                'message': f'Cannot take attendance for {session_time_block} session during {current_period} hours',
+                'session_time_block': session_time_block,
+                'current_period': current_period,
+                'current_time': time_check['current_time'],
+                'allowed_periods': {
+                    'morning_sessions': 'Only during 8:30 AM - 12:30 PM',
+                    'afternoon_sessions': 'Only during 1:30 PM - 5:30 PM'
+                },
+                'suggestion': f'This {session_time_block} session can only be used during {period_names.get(session_time_block, session_time_block)} hours'
+            }), 403
+        
+        print(f"✓ Time block validated: {session_time_block} session during {current_period} hours")
         sys.stdout.flush()
         
         # ============================================================
@@ -427,11 +487,11 @@ def recognize_face():
                 existing_time = existing.get('timestamp')
                 existing_status = existing.get('status')
                 existing_confidence = existing.get('confidence', 0)
-                time_diff = datetime.utcnow() - existing_time if existing_time else timedelta(0)
+                time_diff = get_ethiopian_time() - existing_time if existing_time else timedelta(0)
                 
                 print(f"🚫 DUPLICATE BLOCKED: {student.get('name')} already has attendance in session {session_id}")
                 print(f"   Existing: {existing_status} at {existing_time} (confidence: {existing_confidence:.1f}%)")
-                print(f"   New attempt: present at {datetime.utcnow()} (confidence: {confidence:.1f}%)")
+                print(f"   New attempt: present at {get_ethiopian_time()} (confidence: {confidence:.1f}%)")
                 print(f"   Time difference: {time_diff.total_seconds():.1f} seconds")
                 
                 # If existing record is 'absent' and new is 'present' with higher confidence, update to present
@@ -439,7 +499,7 @@ def recognize_face():
                     new_confidence = max(confidence, existing_confidence)
                     db.execute_query(
                         'UPDATE attendance SET status = %s, confidence = %s, timestamp = %s WHERE id = %s',
-                        ('present', new_confidence, datetime.utcnow(), existing['id']),
+                        ('present', new_confidence, get_ethiopian_time(), existing['id']),
                         fetch=False
                     )
                     
@@ -460,7 +520,7 @@ def recognize_face():
                     if confidence > existing_confidence:
                         db.execute_query(
                             'UPDATE attendance SET confidence = %s, timestamp = %s WHERE id = %s',
-                            (confidence, datetime.utcnow(), existing['id']),
+                            (confidence, get_ethiopian_time(), existing['id']),
                             fetch=False
                         )
                         
@@ -513,7 +573,7 @@ def recognize_face():
                 'time_block': session.get('time_block', ''),  # 'morning' or 'afternoon'
                 'course_name': session.get('course_name', ''),
                 'class_year': session.get('class_year', ''),
-                'timestamp': datetime.utcnow(),
+                'timestamp': get_ethiopian_time(),
                 'date': today,
                 'confidence': confidence,
                 'status': 'present'
@@ -549,7 +609,7 @@ def recognize_face():
                            SET confidence = GREATEST(confidence, %s), 
                                timestamp = %s 
                            WHERE student_id = %s AND session_id = %s''',
-                        (confidence, datetime.utcnow(), student_id, session_id),
+                        (confidence, get_ethiopian_time(), student_id, session_id),
                         fetch=False
                     )
                     
@@ -615,8 +675,60 @@ def recognize_face():
 def start_session():
     """Start a new attendance session with time block"""
     try:
+        # ============================================================
+        # WORKING HOURS VALIDATION
+        # ============================================================
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        from utils.time_restrictions import is_within_working_hours
+        
+        time_check = is_within_working_hours()
+        
+        if not time_check['allowed']:
+            print(f"🚫 SESSION START BLOCKED: Outside working hours - {time_check['message']}")
+            return jsonify({
+                'error': 'Outside working hours',
+                'message': time_check['message'],
+                'current_time': time_check['current_time'],
+                'next_period': time_check['next_period'],
+                'minutes_until_next': time_check.get('minutes_until_next', 0),
+                'working_hours': {
+                    'morning': '8:30 AM - 12:30 PM',
+                    'afternoon': '1:30 PM - 5:30 PM',
+                    'lunch_break': '12:30 PM - 1:30 PM (blocked)'
+                }
+            }), 403
+        
+        print(f"✅ SESSION START OK: {time_check['message']}")
+        
         user_id = get_jwt_identity()
         data = request.get_json()
+        
+        # Validate time_block matches current time period
+        time_block = data.get('time_block')
+        if time_block:
+            current_period = time_check.get('period')  # 'morning' or 'afternoon'
+            
+            if time_block != current_period:
+                period_names = {
+                    'morning': 'Morning (8:30 AM - 12:30 PM)',
+                    'afternoon': 'Afternoon (1:30 PM - 5:30 PM)'
+                }
+                
+                print(f"🚫 TIME BLOCK MISMATCH: Trying to create {time_block} session during {current_period} hours")
+                return jsonify({
+                    'error': 'Time block mismatch',
+                    'message': f'Cannot create {time_block} session during {current_period} hours',
+                    'current_period': current_period,
+                    'current_time': time_check['current_time'],
+                    'requested_time_block': time_block,
+                    'allowed_time_blocks': {
+                        'morning': 'Only during 8:30 AM - 12:30 PM',
+                        'afternoon': 'Only during 1:30 PM - 5:30 PM'
+                    },
+                    'suggestion': f'You can create {time_block} sessions during {period_names.get(time_block, time_block)} hours'
+                }), 403
         
         db = get_db()
         instructor_result = db.execute_query('SELECT * FROM users WHERE id = %s', (user_id,))
@@ -688,7 +800,7 @@ def start_session():
             'class_year': instructor.get('class_year', ''),
             'name': data.get('name', f"Session {datetime.now().strftime('%Y-%m-%d %H:%M')}"),
             'course': course,  # Store in both fields for compatibility
-            'start_time': datetime.utcnow(),
+            'start_time': get_ethiopian_time(),
             'end_time': None,
             'status': 'active',
             'attendance_count': 0,
@@ -769,16 +881,57 @@ def end_session():
             # Stop camera for the day - can be reopened after 12 hours
             db.execute_query(
                 'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
-                (datetime.utcnow(), 'stopped_daily', data['session_id']),
+                (get_ethiopian_time(), 'stopped_daily', data['session_id']),
                 fetch=False
             )
             logger.info(f"Session {data['session_id']} stopped for the day")
             return jsonify({'message': 'Session stopped for the day. Can be reopened after 12 hours.'}), 200
         else:
+            # ============================================================
+            # SEMESTER END RESTRICTIONS
+            # ============================================================
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            from utils.time_restrictions import check_semester_end_eligibility
+            
+            # Get instructor's first session date and total session count
+            first_session_result = db.execute_query(
+                '''SELECT MIN(start_time) as first_session_date, COUNT(*) as session_count
+                   FROM sessions 
+                   WHERE instructor_id = %s 
+                   AND course_name = %s 
+                   AND section_id = %s 
+                   AND year = %s''',
+                (user_id, session.get('course_name'), session.get('section_id'), session.get('year'))
+            )
+            
+            if first_session_result and first_session_result[0]['first_session_date']:
+                first_session_date = first_session_result[0]['first_session_date']
+                session_count = first_session_result[0]['session_count']
+                
+                eligibility = check_semester_end_eligibility(first_session_date, session_count)
+                
+                if not eligibility['can_end_semester']:
+                    print(f"🚫 SEMESTER END BLOCKED: {eligibility['message']}")
+                    return jsonify({
+                        'error': 'Cannot end semester',
+                        'message': eligibility['message'],
+                        'eligibility': eligibility,
+                        'requirements': {
+                            'minimum_months': 4,
+                            'minimum_sessions': 8,
+                            'current_months': eligibility['months_elapsed'],
+                            'current_sessions': eligibility['sessions_conducted']
+                        }
+                    }), 403
+                
+                print(f"✅ SEMESTER END ALLOWED: {eligibility['message']}")
+            
             # Permanent end for semester
             db.execute_query(
                 'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
-                (datetime.utcnow(), 'ended_semester', data['session_id']),
+                (get_ethiopian_time(), 'ended_semester', data['session_id']),
                 fetch=False
             )
             logger.info(f"Session {data['session_id']} ended permanently")
@@ -796,7 +949,7 @@ def end_session():
 @jwt_required()
 @role_required('admin')
 def admin_reopen_session():
-    """Admin-only: Reopen any session, including permanently ended ones"""
+    """Admin-only: Reopen session with time block restrictions"""
     try:
         user_id = get_jwt_identity()
         data = request.get_json()
@@ -814,7 +967,52 @@ def admin_reopen_session():
         
         session = session_result[0]
         
-        # Admin can reopen ANY session, regardless of status or time
+        # ============================================================
+        # TIME BLOCK VALIDATION - Check if current time matches session's time block
+        # ============================================================
+        
+        # Check current time restrictions
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from utils.time_restrictions import is_within_working_hours
+        
+        time_check = is_within_working_hours()
+        if not time_check['allowed']:
+            print(f"🚫 BLOCKED: Cannot reopen session outside working hours - {time_check['message']}")
+            return jsonify({
+                'error': 'Outside working hours',
+                'message': time_check['message'],
+                'current_time': time_check['current_time'],
+                'working_hours': {
+                    'morning': '8:30 AM - 12:30 PM',
+                    'afternoon': '1:30 PM - 5:30 PM'
+                }
+            }), 403
+        
+        # Get session's original time block
+        session_time_block = session.get('time_block')  # 'morning' or 'afternoon'
+        current_period = time_check.get('period')  # 'morning' or 'afternoon'
+        
+        if session_time_block and session_time_block != current_period:
+            period_names = {
+                'morning': 'Morning (8:30 AM - 12:30 PM)',
+                'afternoon': 'Afternoon (1:30 PM - 5:30 PM)'
+            }
+            
+            print(f"🚫 TIME BLOCK MISMATCH: Cannot reopen {session_time_block} session during {current_period} hours")
+            return jsonify({
+                'error': 'Time block mismatch',
+                'message': f'Cannot reopen {session_time_block} session during {current_period} hours',
+                'session_time_block': session_time_block,
+                'current_period': current_period,
+                'current_time': time_check['current_time'],
+                'allowed_reopen_times': {
+                    'morning_sessions': 'Only during 8:30 AM - 12:30 PM',
+                    'afternoon_sessions': 'Only during 1:30 PM - 5:30 PM'
+                },
+                'suggestion': f'This {session_time_block} session can only be reopened during {period_names.get(session_time_block, session_time_block)} hours'
+            }), 403
+        
+        print(f"✓ Time block validated: Reopening {session_time_block} session during {current_period} hours")
         print(f"🔧 Admin {user_id} reopening session {session_id} (status: {session.get('status')})")
         
         # Reopen the session
@@ -828,10 +1026,12 @@ def admin_reopen_session():
         print(f"✅ Admin reopened session {session_id} - Status changed to 'active'")
         
         return jsonify({
-            'message': f'Session reopened successfully by admin',
+            'message': f'Session reopened successfully',
             'session_id': session_id,
             'previous_status': session.get('status'),
-            'new_status': 'active'
+            'new_status': 'active',
+            'time_block': session_time_block,
+            'current_period': current_period
         }), 200
         
     except Exception as e:
@@ -842,11 +1042,11 @@ def admin_reopen_session():
         }), 500
 
 
-@attendance_bp.route('/reopen-session', methods=['POST'])
+@attendance_bp.route('/instructor-reopen-session', methods=['POST'])
 @jwt_required()
 @role_required('instructor')
-def reopen_session():
-    """Reopen a session after 12 hours - keeps old attendance records"""
+def instructor_reopen_session():
+    """Instructor: Reopen their own session with time block restrictions"""
     try:
         user_id = get_jwt_identity()
         data = request.get_json()
@@ -855,68 +1055,96 @@ def reopen_session():
             return jsonify({'error': 'Session ID required'}), 400
         
         session_id = data['session_id']
-        force_reopen = data.get('force', False)
         db = get_db()
         
-        # Get session info
+        # Get session details and verify ownership
         session_result = db.execute_query('SELECT * FROM sessions WHERE id = %s', (session_id,))
         if not session_result:
             return jsonify({'error': 'Session not found'}), 404
         
         session = session_result[0]
         
-        # Verify session belongs to this instructor
+        # Verify instructor owns this session
         if str(session.get('instructor_id')) != str(user_id):
-            return jsonify({
-                'error': 'Unauthorized',
-                'message': 'You can only reopen your own sessions'
-            }), 403
+            return jsonify({'error': 'You can only reopen your own sessions'}), 403
         
-        # Check if session can be reopened (must be stopped_daily and 12+ hours old)
+        # Allow reopening of stopped_daily and completed sessions
         if session.get('status') not in ['stopped_daily', 'completed']:
             return jsonify({
-                'error': 'Cannot reopen',
-                'message': 'Only stopped sessions can be reopened'
+                'error': 'Invalid session status',
+                'message': 'Only daily stopped or completed sessions can be reopened by instructors',
+                'current_status': session.get('status')
             }), 400
         
-        # Check if 12 hours have passed
-        end_time = session.get('end_time')
+        # ============================================================
+        # TIME BLOCK VALIDATION - Check if current time matches session's time block
+        # ============================================================
         
-        if end_time:
-            current_time = datetime.utcnow()
-            hours_since_stop = (current_time - end_time).total_seconds() / 3600
-            
-            if hours_since_stop < 12 and not force_reopen:
-                return jsonify({
-                    'error': 'Too soon',
-                    'message': f'Session can be reopened after 12 hours. {12 - hours_since_stop:.1f} hours remaining.',
-                    'hours_remaining': 12 - hours_since_stop,
-                    'can_force_reopen': True  # Indicate force reopen is available
-                }), 400
-            
-            if force_reopen and hours_since_stop < 12:
-                print(f"🚨 FORCE REOPEN: Instructor {user_id} force reopening session {session_id} after {hours_since_stop:.1f} hours")
-            else:
-                print(f"🔄 Normal reopen: Instructor {user_id} reopening session {session_id} after {hours_since_stop:.1f} hours")
+        # Check current time restrictions
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from utils.time_restrictions import is_within_working_hours
         
-        # Reopen the session - old attendance records remain in database
+        time_check = is_within_working_hours()
+        if not time_check['allowed']:
+            print(f"🚫 BLOCKED: Cannot reopen session outside working hours - {time_check['message']}")
+            return jsonify({
+                'error': 'Outside working hours',
+                'message': time_check['message'],
+                'current_time': time_check['current_time'],
+                'working_hours': {
+                    'morning': '8:30 AM - 12:30 PM',
+                    'afternoon': '1:30 PM - 5:30 PM'
+                }
+            }), 403
+        
+        # Get session's original time block
+        session_time_block = session.get('time_block')  # 'morning' or 'afternoon'
+        current_period = time_check.get('period')  # 'morning' or 'afternoon'
+        
+        if session_time_block and session_time_block != current_period:
+            period_names = {
+                'morning': 'Morning (8:30 AM - 12:30 PM)',
+                'afternoon': 'Afternoon (1:30 PM - 5:30 PM)'
+            }
+            
+            print(f"🚫 TIME BLOCK MISMATCH: Cannot reopen {session_time_block} session during {current_period} hours")
+            return jsonify({
+                'error': 'Time block mismatch',
+                'message': f'Cannot reopen {session_time_block} session during {current_period} hours',
+                'session_time_block': session_time_block,
+                'current_period': current_period,
+                'current_time': time_check['current_time'],
+                'allowed_reopen_times': {
+                    'morning_sessions': 'Only during 8:30 AM - 12:30 PM',
+                    'afternoon_sessions': 'Only during 1:30 PM - 5:30 PM'
+                },
+                'suggestion': f'This {session_time_block} session can only be reopened during {period_names.get(session_time_block, session_time_block)} hours'
+            }), 403
+        
+        print(f"✓ Time block validated: Reopening {session_time_block} session during {current_period} hours")
+        print(f"🔧 Instructor {user_id} reopening session {session_id} (status: {session.get('status')})")
+        
+        # Reopen the session
         db.execute_query(
             'UPDATE sessions SET status = %s, end_time = NULL WHERE id = %s',
             ('active', session_id),
             fetch=False
         )
         
-        logger.info(f"Session {session_id} reopened by instructor. Old attendance records preserved.")
+        # Log the instructor action
+        print(f"✅ Instructor reopened session {session_id} - Status changed to 'active'")
         
         return jsonify({
-            'message': 'Session reopened successfully. Previous attendance records are preserved.',
-            'session_id': str(session_id)
+            'message': f'Session reopened successfully',
+            'session_id': session_id,
+            'previous_status': session.get('status'),
+            'new_status': 'active',
+            'time_block': session_time_block,
+            'current_period': current_period
         }), 200
-    
+        
     except Exception as e:
-        logger.error(f"Error reopening session: {e}", exc_info=True)
-        import traceback
-        traceback.print_exc()
+        print(f"❌ Error in instructor reopen session: {e}")
         return jsonify({
             'error': 'Failed to reopen session',
             'message': str(e)
@@ -990,20 +1218,20 @@ def mark_absent_students():
                      session.get('section_id'), session.get('year'),
                      session.get('session_type'), session.get('time_block'),
                      session.get('course_name'), session.get('class_year'),
-                     datetime.utcnow(), today, 0.0, 'absent'),
+                     get_ethiopian_time(), today, 0.0, 'absent'),
                     fetch=False
                 )
                 absent_count += 1
                 logger.info(f"Marked {student_id} as absent for session {session_id}")
         
-        # Stop session for the day (can be reopened after 12 hours)
+        # Stop session for the day (can be reopened)
         db.execute_query(
             'UPDATE sessions SET end_time = %s, status = %s WHERE id = %s',
-            (datetime.utcnow(), 'stopped_daily', session_id),
+            (get_ethiopian_time(), 'stopped_daily', session_id),
             fetch=False
         )
         
-        logger.info(f"Marked {absent_count} students as absent and stopped session {session_id} for the day")
+        logger.info(f"Marked {absent_count} students as absent and ended session {session_id}")
         
         return jsonify({
             'message': f'Successfully marked {absent_count} students as absent',
@@ -1082,6 +1310,65 @@ def get_session_attendance(session_id):
         traceback.print_exc()
         return jsonify({
             'error': 'Failed to get session attendance',
+            'message': str(e)
+        }), 500
+
+
+@attendance_bp.route('/check-semester-eligibility', methods=['POST'])
+@jwt_required()
+@role_required('instructor')
+def check_semester_eligibility():
+    """Check if instructor can end semester for a specific course/section"""
+    try:
+        user_id = get_jwt_identity()
+        data = request.get_json()
+        
+        course_name = data.get('course_name')
+        section_id = data.get('section_id')
+        year = data.get('year')
+        
+        if not all([course_name, section_id, year]):
+            return jsonify({
+                'error': 'Missing required fields',
+                'message': 'course_name, section_id, and year are required'
+            }), 400
+        
+        db = get_db()
+        
+        # Get instructor's first session date and total session count for this course/section
+        result = db.execute_query(
+            '''SELECT MIN(start_time) as first_session_date, COUNT(*) as session_count
+               FROM sessions 
+               WHERE instructor_id = %s 
+               AND course_name = %s 
+               AND section_id = %s 
+               AND year = %s''',
+            (user_id, course_name, section_id, year)
+        )
+        
+        if not result or not result[0]['first_session_date']:
+            return jsonify({
+                'can_end_semester': False,
+                'message': 'No sessions found for this course/section',
+                'sessions_conducted': 0,
+                'months_elapsed': 0
+            }), 200
+        
+        first_session_date = result[0]['first_session_date']
+        session_count = result[0]['session_count']
+        
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+        from utils.time_restrictions import check_semester_end_eligibility
+        eligibility = check_semester_end_eligibility(first_session_date, session_count)
+        
+        return jsonify(eligibility), 200
+        
+    except Exception as e:
+        logger.error(f"Error checking semester eligibility: {e}", exc_info=True)
+        return jsonify({
+            'error': 'Failed to check eligibility',
             'message': str(e)
         }), 500
 

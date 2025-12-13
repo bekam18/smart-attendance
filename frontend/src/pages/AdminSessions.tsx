@@ -23,6 +23,8 @@ export default function AdminSessions() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
+  const [showReopenModal, setShowReopenModal] = useState(false);
+  const [sessionToReopen, setSessionToReopen] = useState<{id: number, name: string} | null>(null);
 
   useEffect(() => {
     loadSessions();
@@ -58,18 +60,47 @@ export default function AdminSessions() {
     }
   };
 
-  const handleReopenSession = async (sessionId: number, sessionName: string) => {
-    if (!confirm(`Are you sure you want to reopen session "${sessionName}"? This will allow the instructor to continue taking attendance.`)) {
-      return;
-    }
+  const handleReopenSession = (sessionId: number, sessionName: string) => {
+    setSessionToReopen({ id: sessionId, name: sessionName });
+    setShowReopenModal(true);
+  };
 
+  const confirmReopenSession = async () => {
+    if (!sessionToReopen) return;
+    
+    setShowReopenModal(false);
+    
     try {
-      const response = await adminAPI.adminReopenSession(sessionId);
+      await adminAPI.adminReopenSession(sessionToReopen.id);
       toast.success('Session reopened successfully');
       loadSessions(); // Refresh the list
     } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Failed to reopen session');
+      const errorData = error.response?.data;
+      
+      if (errorData?.error === 'Time block mismatch') {
+        // Show detailed time block error
+        toast.error(
+          `${errorData.message}\n\nSuggestion: ${errorData.suggestion}`,
+          { duration: 6000 }
+        );
+      } else if (errorData?.error === 'Outside working hours') {
+        // Show working hours error
+        toast.error(
+          `${errorData.message}\n\nWorking Hours: Morning (8:30 AM - 12:30 PM), Afternoon (1:30 PM - 5:30 PM)`,
+          { duration: 6000 }
+        );
+      } else {
+        // Generic error
+        toast.error(errorData?.message || 'Failed to reopen session');
+      }
     }
+    
+    setSessionToReopen(null);
+  };
+
+  const cancelReopenSession = () => {
+    setShowReopenModal(false);
+    setSessionToReopen(null);
   };
 
   const getStatusBadge = (status: string) => {
@@ -287,6 +318,64 @@ export default function AdminSessions() {
           </div>
         </div>
       </div>
+
+      {/* Reopen Session Confirmation Modal */}
+      {showReopenModal && sessionToReopen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+            <div className="flex items-center mb-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                <RefreshCw className="w-6 h-6 text-blue-600" />
+              </div>
+              <div className="ml-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Reopen Session
+                </h3>
+              </div>
+            </div>
+            
+            <div className="mb-6">
+              <p className="text-gray-700 mb-3">
+                Are you sure you want to reopen session <strong>"{sessionToReopen.name}"</strong>?
+              </p>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3">
+                <p className="text-sm text-blue-800">
+                  <strong>ℹ️ This will:</strong>
+                </p>
+                <ul className="text-sm text-blue-700 mt-2 space-y-1">
+                  <li>• Allow the instructor to continue taking attendance</li>
+                  <li>• Change session status back to "active"</li>
+                  <li>• Enable face recognition for this session</li>
+                </ul>
+              </div>
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p className="text-sm text-yellow-800">
+                  <strong>⏰ Time Block Restriction:</strong> Sessions can only be reopened during their original time period.
+                </p>
+                <ul className="text-sm text-yellow-700 mt-2 space-y-1">
+                  <li>• Morning sessions: 8:30 AM - 12:30 PM</li>
+                  <li>• Afternoon sessions: 1:30 PM - 5:30 PM</li>
+                </ul>
+              </div>
+            </div>
+            
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={cancelReopenSession}
+                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmReopenSession}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+              >
+                Reopen Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
