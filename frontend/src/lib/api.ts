@@ -301,6 +301,13 @@ export const attendanceAPI = {
   
   instructorReopenSession: (sessionId: number) =>
     api.post('/api/attendance/instructor-reopen-session', { session_id: sessionId }),
+  
+  // Face detection for real-time tracking
+  detectFace: (image: Blob) => {
+    const formData = new FormData();
+    formData.append('image', image);
+    return api.post('/api/attendance/detect-face', formData);
+  },
 };
 
 // Instructor API

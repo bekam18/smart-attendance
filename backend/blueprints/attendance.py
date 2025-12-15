@@ -122,10 +122,18 @@ def detect_face():
             print("✓ Improved detector loaded")
             
             print(f"🔍 Detecting faces in image shape: {img_array.shape}")
+            print(f"🔍 Image stats: min={img_array.min()}, max={img_array.max()}, mean={img_array.mean():.1f}")
             
             # Detect faces with confidence scores
             results = detector.detect_faces(img_array, return_confidence=True)
             print(f"✓ Detection complete, found {len(results)} faces")
+            
+            if len(results) == 0:
+                print("⚠️ No faces detected - trying with ULTRA-LOW threshold for speed...")
+                # Try with ultra-low threshold for maximum speed
+                detector.min_detection_confidence = 0.2
+                results = detector.detect_faces(img_array, return_confidence=True)
+                print(f"✓ Second attempt found {len(results)} faces")
             
             if len(results) == 0:
                 print("⚠️ No faces detected")
@@ -487,11 +495,23 @@ def recognize_face():
                 existing_time = existing.get('timestamp')
                 existing_status = existing.get('status')
                 existing_confidence = existing.get('confidence', 0)
-                time_diff = get_ethiopian_time() - existing_time if existing_time else timedelta(0)
+                # Fix timezone issue: ensure both datetimes are timezone-aware
+                if existing_time:
+                    # If existing_time is naive (no timezone), assume it's UTC and convert
+                    if existing_time.tzinfo is None:
+                        from utils.timezone_helper import UTC_TZ
+                        existing_time = UTC_TZ.localize(existing_time)
+                    
+                    # Convert both to Ethiopian time for comparison
+                    current_ethiopian = get_ethiopian_time()
+                    existing_ethiopian = existing_time.astimezone(current_ethiopian.tzinfo)
+                    time_diff = current_ethiopian - existing_ethiopian
+                else:
+                    time_diff = timedelta(0)
                 
                 print(f"🚫 DUPLICATE BLOCKED: {student.get('name')} already has attendance in session {session_id}")
                 print(f"   Existing: {existing_status} at {existing_time} (confidence: {existing_confidence:.1f}%)")
-                print(f"   New attempt: present at {get_ethiopian_time()} (confidence: {confidence:.1f}%)")
+                print(f"   New attempt: present at {current_ethiopian} (confidence: {confidence:.1f}%)")
                 print(f"   Time difference: {time_diff.total_seconds():.1f} seconds")
                 
                 # If existing record is 'absent' and new is 'present' with higher confidence, update to present

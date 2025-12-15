@@ -48,22 +48,22 @@ class ImprovedFaceDetector:
                     allowed_modules=['detection']
                 )
                 
-                # Prepare with optimal detection size
-                # Very low threshold for maximum side face detection
+                # Prepare with ULTRA-FAST detection size for maximum speed
+                # Optimized for lightning-fast face detection
                 self.detector.prepare(
                     ctx_id=-1, 
-                    det_size=(320, 320),  # Reduced for faster processing
-                    det_thresh=0.3  # Slightly higher threshold for speed
+                    det_size=(160, 160),  # Ultra-small for maximum speed
+                    det_thresh=0.4  # Higher threshold for faster processing
                 )
                 
                 # Update minimum confidence for filtering
-                self.min_detection_confidence = 0.2  # Very low for side faces
+                self.min_detection_confidence = 0.3  # Higher for faster processing
                 
-                print("✅ Improved InsightFace detector initialized")
+                print("✅ LIGHTNING-FAST InsightFace detector initialized")
                 print("   Model: buffalo_l")
-                print("   Detection size: 320x320 (optimized for speed)")
-                print("   Threshold: 0.3 (balanced speed and accuracy)")
-                print("   Status: Ready for high-performance face detection")
+                print("   Detection size: 160x160 (ULTRA-FAST)")
+                print("   Threshold: 0.4 (MAXIMUM SPEED)")
+                print("   Status: Ready for LIGHTNING-FAST face detection")
                 
             elif self.method == 'opencv':
                 # Use DNN-based face detector (much better than Haar Cascade)
@@ -212,8 +212,8 @@ class ImprovedFaceDetector:
                     # Get confidence score
                     confidence = float(face.det_score)
                     
-                    # Filter by confidence (balanced threshold for speed)
-                    if confidence < 0.3:  # Higher threshold for better performance
+                    # Filter by confidence (ULTRA-HIGH threshold for maximum speed)
+                    if confidence < 0.5:  # Ultra-high threshold for lightning-fast performance
                         continue
                     
                     # Expand bbox slightly

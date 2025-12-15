@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Detection API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .video-container {
+            position: relative;
+            background: black;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .debug {
+            background: #333;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        .success {
+            background: #28a745;
+        }
+        .error {
+            background: #dc3545;
+        }
+        .warning {
+            background: #ffc107;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Face Detection API Test</h1>
+        
+        <div class="video-container">
+            <video id="video" autoplay muted playsinline></video>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">Start Camera</button>
+            <button id="stopBtn" disabled>Stop Camera</button>
+            <button id="testApiBtn" disabled>Test Face Detection API</button>
+            <button id="checkAuthBtn">Check Authentication</button>
+        </div>
+
+        <div id="status"></div>
+
+        <div id="debug" class="debug">
+            <strong>Debug Log:</strong><br>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const debugDiv = document.getElementById('debug');
+        const statusDiv = document.getElementById('status');
+        
+        let stream = null;
+        let isActive = false;
+        
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const color = type === 'error' ? 'red' : type === 'success' ? 'green' : type === 'warning' ? 'orange' : 'white';
+            debugDiv.innerHTML += `<span style="color: ${color}">[${timestamp}] ${message}</span><br>`;
+            debugDiv.scrollTop = debugDiv.scrollHeight;
+            console.log(message);
+        }
+        
+        function showStatus(message, type = 'info') {
+            statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+        
+        async function checkAuth() {
+            try {
+                const token = localStorage.getItem('token');
+                log(`🔑 Token exists: ${!!token}`, token ? 'success' : 'warning');
+                
+                if (token) {
+                    log(`🔑 Token preview: ${token.substring(0, 20)}...`, 'info');
+                    
+                    // Test a simple authenticated endpoint
+                    const response = await fetch('http://127.0.0.1:5000/api/auth/me', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        const user = await response.json();
+                        log(`✅ Authentication successful: ${user.username} (${user.role})`, 'success');
+                        showStatus(`✅ Authenticated as ${user.username} (${user.role})`, 'success');
+                        return true;
+                    } else {
+                        log(`❌ Authentication failed: ${response.status} ${response.statusText}`, 'error');
+                        showStatus(`❌ Authentication failed: ${response.status}`, 'error');
+                        return false;
+                    }
+                } else {
+                    log('❌ No authentication token found', 'error');
+                    showStatus('❌ No authentication token found. Please log in first.', 'error');
+                    return false;
+                }
+            } catch (error) {
+                log(`❌ Auth check error: ${error.message}`, 'error');
+                showStatus(`❌ Auth check error: ${error.message}`, 'error');
+                return false;
+            }
+        }
+        
+        async function startCamera() {
+            try {
+                log('🚀 Starting camera...', 'info');
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                
+                video.srcObject = stream;
+                isActive = true;
+                
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('testApiBtn').disabled = false;
+                
+                video.onloadedmetadata = () => {
+                    log(`✅ Video loaded: ${video.videoWidth}x${video.videoHeight}`, 'success');
+                    showStatus('✅ Camera started successfully', 'success');
+                };
+                
+            } catch (error) {
+                log(`❌ Camera error: ${error.message}`, 'error');
+                showStatus(`❌ Camera error: ${error.message}`, 'error');
+            }
+        }
+        
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            isActive = false;
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('testApiBtn').disabled = true;
+            
+            log('⏹️ Camera stopped', 'info');
+            showStatus('⏹️ Camera stopped', 'info');
+        }
+        
+        async function testFaceDetectionAPI() {
+            if (!isActive) {
+                log('❌ Camera not active', 'error');
+                return;
+            }
+            
+            try {
+                log('📸 Capturing frame for face detection...', 'info');
+                
+                // Create a canvas to capture the video frame
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                // Use small resolution for faster processing
+                const targetWidth = 160;
+                const targetHeight = 120;
+                
+                canvas.width = targetWidth;
+                canvas.height = targetHeight;
+                ctx.drawImage(video, 0, 0, targetWidth, targetHeight);
+                
+                // Convert to blob
+                const blob = await new Promise((resolve) => {
+                    canvas.toBlob(resolve, 'image/jpeg', 0.2);
+                });
+                
+                if (!blob) {
+                    log('❌ Failed to create blob', 'error');
+                    return;
+                }
+                
+                log(`📦 Blob created: ${blob.size} bytes`, 'info');
+                
+                // Check authentication first
+                const token = localStorage.getItem('token');
+                if (!token) {
+                    log('❌ No authentication token', 'error');
+                    showStatus('❌ Please log in first', 'error');
+                    return;
+                }
+                
+                // Send to backend
+                const formData = new FormData();
+                formData.append('image', blob);
+                
+                log('🔍 Sending request to face detection API...', 'info');
+                const startTime = Date.now();
+                
+                const response = await fetch('http://127.0.0.1:5000/api/attendance/detect-face', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: formData
+                });
+                
+                const responseTime = Date.now() - startTime;
+                log(`⏱️ Response time: ${responseTime}ms`, 'info');
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    log(`❌ HTTP Error: ${response.status} ${response.statusText}`, 'error');
+                    log(`❌ Error details: ${errorText}`, 'error');
+                    showStatus(`❌ API Error: ${response.status} ${response.statusText}`, 'error');
+                    return;
+                }
+                
+                const data = await response.json();
+                log(`📥 Response: ${JSON.stringify(data, null, 2)}`, 'info');
+                
+                if (data.status === 'success' && data.faces && data.faces.length > 0) {
+                    const face = data.faces[0];
+                    log(`✅ Face detected!`, 'success');
+                    log(`📦 Bbox: x=${face.bbox.x}, y=${face.bbox.y}, w=${face.bbox.w}, h=${face.bbox.h}`, 'success');
+                    log(`🎯 Confidence: ${(face.confidence * 100).toFixed(1)}%`, 'success');
+                    showStatus(`✅ Face detected! Confidence: ${(face.confidence * 100).toFixed(1)}%`, 'success');
+                } else if (data.status === 'no_face') {
+                    log(`⚠️ No face detected in image`, 'warning');
+                    showStatus('⚠️ No face detected. Try positioning your face in the camera.', 'warning');
+                } else {
+                    log(`❌ Unexpected response: ${data.status}`, 'error');
+                    showStatus(`❌ Unexpected response: ${data.status}`, 'error');
+                }
+                
+            } catch (error) {
+                log(`❌ API test error: ${error.message}`, 'error');
+                showStatus(`❌ API test error: ${error.message}`, 'error');
+            }
+        }
+        
+        // Event listeners
+        document.getElementById('startBtn').addEventListener('click', startCamera);
+        document.getElementById('stopBtn').addEventListener('click', stopCamera);
+        document.getElementById('testApiBtn').addEventListener('click', testFaceDetectionAPI);
+        document.getElementById('checkAuthBtn').addEventListener('click', checkAuth);
+        
+        // Auto-check auth on load
+        window.addEventListener('load', () => {
+            log('🚀 Face Detection API Test loaded', 'info');
+            checkAuth();
+        });
+    </script>
+</body>
+</html>

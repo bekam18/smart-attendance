@@ -39,9 +39,9 @@ export default function AttendanceSession() {
   const handleCapture = async (blob: Blob) => {
     if (processing || !sessionId) return;
     
-    // Rate limiting: prevent multiple recognitions within 3 seconds
+    // Rate limiting: prevent multiple recognitions within 2 seconds (reduced for better responsiveness)
     const now = Date.now();
-    if (now - lastRecognitionTime < 3000) {
+    if (now - lastRecognitionTime < 2000) {
       console.log('Recognition rate limited - too soon since last attempt');
       return;
     }
@@ -300,7 +300,7 @@ export default function AttendanceSession() {
               <CameraPreview 
                 onCapture={handleCapture}
                 autoCapture={session.status === 'active'}
-                captureInterval={2000}
+                captureInterval={1500}
               />
               
               {processing && (

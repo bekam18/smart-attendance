@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Detection Box Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #1a1a1a;
+            color: white;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .video-container {
+            position: relative;
+            background: black;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .debug {
+            background: #333;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 Face Detection Box Test</h1>
+        
+        <div class="video-container">
+            <video id="video" autoplay muted playsinline></video>
+            <canvas id="overlay" class="overlay"></canvas>
+        </div>
+
+        <div class="controls">
+            <button id="startBtn">Start Camera</button>
+            <button id="stopBtn" disabled>Stop Camera</button>
+            <button id="testDetectionBtn" disabled>Test Detection</button>
+        </div>
+
+        <div id="debug" class="debug">
+            <strong>Debug Log:</strong><br>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('overlay');
+        const ctx = canvas.getContext('2d');
+        const debugDiv = document.getElementById('debug');
+        
+        let stream = null;
+        let isActive = false;
+        let detectionInterval = null;
+        
+        function log(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            debugDiv.innerHTML += `[${timestamp}] ${message}<br>`;
+            debugDiv.scrollTop = debugDiv.scrollHeight;
+            console.log(message);
+        }
+        
+        async function startCamera() {
+            try {
+                log('🚀 Starting camera...');
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 480, facingMode: 'user' }
+                });
+                
+                video.srcObject = stream;
+                isActive = true;
+                
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('testDetectionBtn').disabled = false;
+                
+                video.onloadedmetadata = () => {
+                    log(`✅ Video loaded: ${video.videoWidth}x${video.videoHeight}`);
+                    setupCanvas();
+                    startDetection();
+                };
+                
+            } catch (error) {
+                log(`❌ Camera error: ${error.message}`);
+            }
+        }
+        
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                stream = null;
+            }
+            
+            if (detectionInterval) {
+                clearInterval(detectionInterval);
+                detectionInterval = null;
+            }
+            
+            isActive = false;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('testDetectionBtn').disabled = true;
+            
+            log('⏹️ Camera stopped');
+        }
+        
+        function setupCanvas() {
+            const rect = video.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            log(`📐 Canvas setup: ${canvas.width}x${canvas.height}`);
+        }
+        
+        function startDetection() {
+            log('🔍 Starting face detection...');
+            detectionInterval = setInterval(testDetection, 1000);
+        }
+        
+        async function testDetection() {
+            if (!isActive) return;
+            
+            try {
+                log('📸 Capturing frame for detection...');
+                
+                // Create a canvas to capture the video frame
+                const captureCanvas = document.createElement('canvas');
+                const captureCtx = captureCanvas.getContext('2d');
+                
+                // Use small resolution for faster processing
+                const targetWidth = 160;
+                const targetHeight = 120;
+                
+                captureCanvas.width = targetWidth;
+                captureCanvas.height = targetHeight;
+                captureCtx.drawImage(video, 0, 0, targetWidth, targetHeight);
+                
+                // Convert to blob
+                const blob = await new Promise((resolve) => {
+                    captureCanvas.toBlob(resolve, 'image/jpeg', 0.2);
+                });
+                
+                if (!blob) {
+                    log('❌ Failed to create blob');
+                    return;
+                }
+                
+                log(`📦 Blob created: ${blob.size} bytes`);
+                
+                // Send to backend
+                const formData = new FormData();
+                formData.append('image', blob);
+                
+                const response = await fetch('http://127.0.0.1:5000/api/attendance/detect-face', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('token') || 'test-token'}`
+                    },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                log(`📥 Response: ${JSON.stringify(data)}`);
+                
+                if (data.status === 'success' && data.faces && data.faces.length > 0) {
+                    const face = data.faces[0];
+                    log(`✅ Face detected: ${JSON.stringify(face.bbox)}`);
+                    
+                    // Scale bbox to display coordinates
+                    const scaleX = video.videoWidth / targetWidth;
+                    const scaleY = video.videoHeight / targetHeight;
+                    
+                    const displayScaleX = canvas.width / video.videoWidth;
+                    const displayScaleY = canvas.height / video.videoHeight;
+                    
+                    const x = face.bbox.x * scaleX * displayScaleX;
+                    const y = face.bbox.y * scaleY * displayScaleY;
+                    const w = face.bbox.w * scaleX * displayScaleX;
+                    const h = face.bbox.h * scaleY * displayScaleY;
+                    
+                    log(`🎨 Drawing box at: (${x.toFixed(0)}, ${y.toFixed(0)}, ${w.toFixed(0)}, ${h.toFixed(0)})`);
+                    
+                    drawFaceBox(x, y, w, h, face.confidence);
+                } else {
+                    log(`❌ No face detected: ${data.status}`);
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+                
+            } catch (error) {
+                log(`❌ Detection error: ${error.message}`);
+            }
+        }
+        
+        function drawFaceBox(x, y, w, h, confidence) {
+            // Clear previous drawings
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw main bounding box
+            ctx.strokeStyle = '#FF6B9D';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, w, h);
+            
+            // Draw label
+            const label = `DETECTED ${(confidence * 100).toFixed(0)}%`;
+            ctx.font = 'bold 14px Arial';
+            const textWidth = ctx.measureText(label).width;
+            
+            // Label background
+            ctx.fillStyle = '#FF6B9D';
+            ctx.fillRect(x, y - 25, textWidth + 16, 25);
+            
+            // Label text
+            ctx.fillStyle = '#FFFFFF';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(label, x + 8, y - 21);
+            
+            // Corner brackets
+            const cornerLength = Math.min(20, Math.min(w, h) / 5);
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#FF6B9D';
+            
+            // Top-left corner
+            ctx.beginPath();
+            ctx.moveTo(x, y + cornerLength);
+            ctx.lineTo(x, y);
+            ctx.lineTo(x + cornerLength, y);
+            ctx.stroke();
+            
+            // Top-right corner
+            ctx.beginPath();
+            ctx.moveTo(x + w - cornerLength, y);
+            ctx.lineTo(x + w, y);
+            ctx.lineTo(x + w, y + cornerLength);
+            ctx.stroke();
+            
+            // Bottom-left corner
+            ctx.beginPath();
+            ctx.moveTo(x, y + h - cornerLength);
+            ctx.lineTo(x, y + h);
+            ctx.lineTo(x + cornerLength, y + h);
+            ctx.stroke();
+            
+            // Bottom-right corner
+            ctx.beginPath();
+            ctx.moveTo(x + w - cornerLength, y + h);
+            ctx.lineTo(x + w, y + h);
+            ctx.lineTo(x + w, y + h - cornerLength);
+            ctx.stroke();
+            
+            log(`✅ Face box drawn successfully`);
+        }
+        
+        // Event listeners
+        document.getElementById('startBtn').addEventListener('click', startCamera);
+        document.getElementById('stopBtn').addEventListener('click', stopCamera);
+        document.getElementById('testDetectionBtn').addEventListener('click', testDetection);
+        
+        // Auto-resize canvas when window resizes
+        window.addEventListener('resize', () => {
+            if (isActive) {
+                setupCanvas();
+            }
+        });
+    </script>
+</body>
+</html>

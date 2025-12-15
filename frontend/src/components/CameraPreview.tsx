@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Camera, CameraOff } from 'lucide-react';
 import toast from 'react-hot-toast';
-import api from '../lib/api';
+import { attendanceAPI } from '../lib/api';
 
 interface CameraPreviewProps {
   onCapture?: (blob: Blob) => void;
@@ -30,6 +30,7 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [isActive, setIsActive] = useState(false);
   const [faceDetected, setFaceDetected] = useState(false);
+  const [detectionSpeed, setDetectionSpeed] = useState<number>(0);
   const intervalRef = useRef<number | null>(null);
   const detectionIntervalRef = useRef<number | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -39,52 +40,90 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
   const isActiveRef = useRef<boolean>(false);
   const lastDetectionTime = useRef<number>(0);
   const isProcessing = useRef<boolean>(false);
+  const faceDetector = useRef<any>(null);
+  const clientSideDetectionRef = useRef<number | null>(null);
+
+  // Client-side face detection using browser API (if available)
+  const detectFacesClientSide = async () => {
+    if (!videoRef.current || !isActiveRef.current) return;
+    
+    const video = videoRef.current;
+    if (video.readyState !== 4) return;
+    
+    try {
+      // Try to use browser's FaceDetector API if available
+      if (faceDetector.current) {
+        const faces = await faceDetector.current.detect(video);
+        
+        if (faces && faces.length > 0) {
+          const face = faces[0];
+          const bbox = face.boundingBox;
+          
+          const faceBox = {
+            x: bbox.x,
+            y: bbox.y,
+            w: bbox.width,
+            h: bbox.height
+          };
+          
+          lastFaceBoxRef.current = faceBox;
+          setFaceDetected(true);
+        } else {
+          // Only clear if we haven't detected from backend recently
+          const timeSinceBackendDetection = Date.now() - lastDetectionTime.current;
+          if (timeSinceBackendDetection > 2000) {
+            lastFaceBoxRef.current = null;
+            setFaceDetected(false);
+          }
+        }
+      }
+    } catch (error) {
+      // Silently fail - client-side detection is optional
+    }
+  };
 
   const detectFacesFromBackend = async () => {
     if (!videoRef.current || !canvasRef.current || !isActiveRef.current || isProcessing.current) return;
     
-    // Skip if we just processed recently (avoid overwhelming the backend)
+    // ULTRA-FAST detection - maximum responsiveness (50ms for lightning-fast tracking)
     const now = Date.now();
-    if (now - lastDetectionTime.current < 4000) return; // Minimum 4 seconds between detections
+    if (now - lastDetectionTime.current < 50) return; // 50ms for lightning-fast tracking
     
     isProcessing.current = true;
+    const detectionStartTime = now;
     lastDetectionTime.current = now;
     
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
     
-    if (!context || video.readyState !== 4) return;
+    if (!context || video.readyState !== 4) {
+      isProcessing.current = false;
+      return;
+    }
     
     try {
-      // Reduce resolution for faster processing
-      const targetWidth = 640;
-      const targetHeight = 480;
+      // ULTRA-SMALL resolution for maximum speed
+      const targetWidth = 120; // Ultra-small for maximum speed
+      const targetHeight = 90; // Ultra-small for maximum speed
       
       canvas.width = targetWidth;
       canvas.height = targetHeight;
       context.drawImage(video, 0, 0, targetWidth, targetHeight);
       
-      // Convert to blob with lower quality for speed
+      // ULTRA-LOW quality for maximum speed
       const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob(resolve, 'image/jpeg', 0.6);
+        canvas.toBlob(resolve, 'image/jpeg', 0.3); // Ultra-low quality for maximum speed
       });
       
       if (!blob) {
         console.log('Failed to create blob from canvas');
+        isProcessing.current = false;
         return;
       }
       
-      // Send to backend for detection
-      const formData = new FormData();
-      formData.append('image', blob);
-      
-      const response = await api.post('/api/attendance/detect-face', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 5000 // 5 second timeout
-      });
+      // Send to backend for detection using the proper API
+      const response = await attendanceAPI.detectFace(blob);
       
       const data = response.data;
       
@@ -104,6 +143,10 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
         lastFaceBoxRef.current = scaledBbox;
         lastFaceDataRef.current = { ...faceData, bbox: scaledBbox };
         setFaceDetected(true);
+        
+        // Update detection speed
+        const detectionTime = Date.now() - detectionStartTime;
+        setDetectionSpeed(detectionTime);
       } else {
         lastFaceBoxRef.current = null;
         lastFaceDataRef.current = null;
@@ -159,11 +202,11 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
     
     // Draw face box if detected
     if (lastFaceBoxRef.current) {
-      // Smooth the box movement
+      // Smooth the box movement for better tracking
       if (!smoothedBoxRef.current) {
         smoothedBoxRef.current = { ...lastFaceBoxRef.current };
       } else {
-        const alpha = 0.3; // Smoothing factor (0-1, lower = smoother)
+        const alpha = 0.95; // Ultra-high responsiveness for lightning-fast tracking
         smoothedBoxRef.current.x += alpha * (lastFaceBoxRef.current.x - smoothedBoxRef.current.x);
         smoothedBoxRef.current.y += alpha * (lastFaceBoxRef.current.y - smoothedBoxRef.current.y);
         smoothedBoxRef.current.w += alpha * (lastFaceBoxRef.current.w - smoothedBoxRef.current.w);
@@ -182,10 +225,13 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
       
       // Validate coordinates
       if (x >= 0 && y >= 0 && w > 0 && h > 0) {
-        // Draw main bounding box
+        // Draw main bounding box with animation effect
+        const pulseEffect = Math.sin(Date.now() / 200) * 0.1 + 0.9; // Subtle pulse animation
         context.strokeStyle = '#FF6B9D'; // Pink/salmon color like in the image
         context.lineWidth = 3;
+        context.globalAlpha = pulseEffect;
         context.strokeRect(x, y, w, h);
+        context.globalAlpha = 1.0; // Reset alpha
         
         // Prepare label text
         let labelText = 'DETECTING...';
@@ -280,20 +326,40 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
           console.log(`📹 Native: ${videoRef.current?.videoWidth}x${videoRef.current?.videoHeight}`);
           console.log(`📺 Display: ${videoRef.current?.clientWidth}x${videoRef.current?.clientHeight}`);
           
+          // Initialize client-side face detector if available
+          try {
+            // @ts-ignore - FaceDetector is experimental
+            if (window.FaceDetector) {
+              // @ts-ignore
+              faceDetector.current = new window.FaceDetector({
+                maxDetectedFaces: 1,
+                fastMode: true
+              });
+              console.log('✅ Client-side FaceDetector initialized');
+              
+              // Start client-side detection for LIGHTNING-FAST tracking (120fps)
+              clientSideDetectionRef.current = setInterval(() => {
+                detectFacesClientSide();
+              }, 16); // ~60fps for ultra-smooth tracking
+            }
+          } catch (error) {
+            console.log('⚠️ Client-side FaceDetector not available, using backend only');
+          }
+          
           // Start overlay animation loop (60fps for smooth tracking)
           console.log('🚀 Starting animation loop...');
           animationFrameRef.current = requestAnimationFrame(updateOverlay);
           
-          // Start backend face detection (every 4 seconds to prevent duplicates)
+          // Start backend face detection (faster for better tracking)
           setTimeout(() => {
             console.log('🚀 Starting detection interval...');
             detectionIntervalRef.current = setInterval(() => {
               detectFacesFromBackend();
-            }, 4000);  // Increased from 500ms to 4000ms
+            }, 60);  // LIGHTNING-FAST 60ms intervals for ultra-responsive tracking
             
-            // Trigger first detection after 2 seconds
-            setTimeout(() => detectFacesFromBackend(), 2000);
-          }, 1000);
+            // Trigger first detection immediately
+            setTimeout(() => detectFacesFromBackend(), 100);
+          }, 100);
         };
       }
       
@@ -328,6 +394,11 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
       if (detectionIntervalRef.current) {
         clearInterval(detectionIntervalRef.current);
         detectionIntervalRef.current = null;
+      }
+      
+      if (clientSideDetectionRef.current) {
+        clearInterval(clientSideDetectionRef.current);
+        clientSideDetectionRef.current = null;
       }
       
       if (animationFrameRef.current) {
@@ -417,7 +488,14 @@ export default function CameraPreview({ onCapture, autoCapture = false, captureI
         {/* Face detection indicator */}
         {isActive && faceDetected && (
           <div className="absolute top-4 right-4 px-3 py-1 bg-green-500 text-white text-sm rounded-full font-medium">
-            Face Detected
+            Face Detected {detectionSpeed > 0 && `(${detectionSpeed}ms)`}
+          </div>
+        )}
+        
+        {/* Processing indicator */}
+        {isActive && isProcessing && (
+          <div className="absolute top-4 left-4 px-3 py-1 bg-blue-500 text-white text-sm rounded-full font-medium animate-pulse">
+            Processing...
           </div>
         )}
       </div>
